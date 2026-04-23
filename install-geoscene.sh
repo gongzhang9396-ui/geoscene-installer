@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 #==============================================================================
-# GeoScene Enterprise Universal Installer (v5.1)
-# 支持: 全自动化安装配置 | 实际IP网络配置 | 异常提示浏览器处理
-# 支持: help 参数 | 配置文件 | 静默模式 | DRY-RUN 模式 | 重试机制
+# GeoScene Enterprise Universal Installer (v7.0)
+# 支持: 全自动化安装配置 | 实际IP网络配置 | 主机名/FQDN配置 | 证书管理
+# 支持: Tomcat/JDK自动下载安装 | 多平台支持 | 幂等执行 | 架构检查
+# 支持: help参数 | 配置文件 | 静默模式 | DRY-RUN模式 | 重试机制
 #==============================================================================
 set -euo pipefail
 shopt -s nullglob extglob
 
-SCRIPT_VERSION="5.1"
+SCRIPT_VERSION="7.0"
 SCRIPT_NAME="install-geoscene.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_CONFIG="geoscene.conf"
@@ -37,197 +38,163 @@ PORTAL_ADMIN_LN="User"
 PORTAL_ADMIN_QI="1"
 PORTAL_ADMIN_QA="Beijing"
 
+# 主机名/FQDN配置（关键：避免localhost问题）
+HOSTNAME=""
+FQDN=""
+CONFIGURE_HOSTNAME=true
+CONFIGURE_HOSTS=true
+
+# WebAdaptor配置（v7.0: 变为必选组件）
+INSTALL_WEBADAPTOR=true
+TOMCAT_VERSION="9.0.89"
+TOMCAT_HOME=""
+JDK_VERSION="17"
+JDK_HOME=""
+WEBADAPTOR_PORT="443"
+WEBADAPTOR_CONTEXT="geoscene"
+
+# JDK下载配置
+JDK_PROVIDER="adoptium"
+JDK_BASE_URL="https://api.adoptium.net"
+
+# Tomcat下载配置
+TOMCAT_BASE_URL="https://dlcdn.apache.org/tomcat/tomcat-9"
+
+# 证书配置
+CREATE_SELF_SIGNED_CERT=true
+CERT_COUNTRY="CN"
+CERT_STATE="Beijing"
+CERT_CITY="Beijing"
+CERT_ORG="GeoScene"
+CERT_OU="Product Department"
+CERT_EMAIL="admin@geoscene.cn"
+CERT_DAYS="3650"
+CERT_PASSWORD="geoscene"
+
+# 联合托管配置
+CONFIGURE_FEDERATION=true
+
+# 自动下载配置
+AUTO_DOWNLOAD=true
+
 CONFIG_FILE=""
 DRY_RUN=false
 SKIP_CONFIG=false
+SKIP_HOSTNAME=false
 HOST_IP=""
 
 #==============================================================================
 # 帮助函数定义（必须在参数解析前）
 #==============================================================================
 show_help() {
-    echo "
-GeoScene Enterprise Installer v${SCRIPT_VERSION}
+    cat << 'EOF'
+GeoScene Enterprise Installer v7.0
 
-用法: $SCRIPT_NAME [选项]
+用法: install-geoscene.sh [选项]
 
 选项:
   -h, --help              显示此帮助信息
   --man                   显示完整手册页
   -n, --dry-run           预演模式，不执行实际变更
-  --config=FILE           指定配置文件 (默认: $DEFAULT_CONFIG)
+  --config=FILE           指定配置文件 (默认: geoscene.conf)
   --skip-config           仅安装软件，跳过站点配置
+  --skip-hostname         跳过主机名和hosts配置
   --gs-user=USER          GeoScene 运行用户 (默认: geoscene)
   --gs-base=DIR           安装基础目录 (默认: /home/geoscene/geoscene)
+  --fqdn=DOMAIN           设置完全限定域名(FQDN)
+  --hostname=NAME         设置主机名
+  --jdk-version=VERSION   JDK版本 (17/11/8, 默认: 17)
+  --tomcat-version=VER    Tomcat版本 (默认: 9.0.89)
+  --create-cert           创建自签名证书
+  --configure-federation  配置Portal-Server联合托管
+
+必需组件 (v7.0):
+  - Server安装包 (GeoScene_Server_Linux_*.tar.gz)
+  - Portal安装包 (GeoScene_Portal_Linux_*.tar.gz)
+  - DataStore安装包 (GeoScene_DataStore_Linux_*.tar.gz)
+  - WebAdaptor安装包 (GeoScene_Web_Adaptor_java_Linux_*.tar.gz)
 
 示例:
   # 使用配置文件全自动安装
-  $SCRIPT_NAME --config=geoscene.conf
+  bash install-geoscene.sh --config=geoscene.conf
 
-  # 仅安装软件，跳过自动化配置
-  $SCRIPT_NAME --skip-config
+  # 指定FQDN进行安装
+  bash install-geoscene.sh --fqdn=portal.geosceneenterprise.cn
 
   # 预演模式
-  $SCRIPT_NAME --dry-run
-
-配置文件格式 (geoscene.conf):
-  # 用户和目录配置
-  GS_USER=geoscene
-  GS_GROUP=geoscene
-  GS_HOME=/home/geoscene
-  GS_BASE=/home/geoscene/geoscene
-  
-  # 端口配置
-  SERVER_PORT=6443
-  PORTAL_PORT=7443
-  DATASTORE_PORT=2443
-  
-  # 管理员账户配置（用于自动创建站点）
-  SITE_ADMIN_USER=siteadmin
-  SITE_ADMIN_PASS=YourPassword123
-  PORTAL_ADMIN_USER=portaladmin
-  PORTAL_ADMIN_PASS=YourPassword123
-  PORTAL_ADMIN_EMAIL=portaladmin@example.com
-  PORTAL_ADMIN_FN=Admin
-  PORTAL_ADMIN_LN=User
-  PORTAL_ADMIN_QI=1
-  PORTAL_ADMIN_QA=Beijing
-  
-  # 资源要求
-  MIN_RAM_MB=8192
-  MIN_CPU_CORES=4
-  MIN_DISK_HOME_GB=20
-  MIN_DISK_INSTALL_GB=30
-
-工作流程:
-  1. 前置校验 (权限、资源、端口)
-  2. 系统配置 (用户、防火墙、limits)
-  3. 软件安装 (解压、Setup 静默安装)
-  4. Server 授权 (自动执行)
-  5. Server 站点创建 (自动执行)
-  6. Portal 门户创建 (自动执行)
-  7. Portal 授权导入 (自动执行)
-  8. DataStore 配置 (自动执行)
-
-注意:
-  - 需要 root 权限执行
-  - 安装包和授权文件需放在脚本同目录
-  - 授权文件命名需包含 server/portal/enterprise 关键字
-  - 自动化配置失败时会提示用户浏览器手动处理
-"
+  bash install-geoscene.sh --dry-run
+EOF
 }
 
 show_man() {
-    echo "
-GEOSCENE-INSTALL(1)          GeoScene Enterprise Installer          GEOSCENE-INSTALL(1)
+    cat << 'EOF'
+GEOSCENE-INSTALL(1)          GeoScene Enterprise Installer
 
 名称
-    install-geoscene.sh - GeoScene Enterprise 全自动化安装脚本
-
-版本
-    v${SCRIPT_VERSION}
+    install-geoscene.sh - GeoScene Enterprise 全自动化安装脚本 v7.0
 
 描述
-    本脚本提供 GeoScene Enterprise (Server, Portal, DataStore) 的全自动安装部署，
-    包括软件安装、授权、站点创建、门户初始化、DataStore配置等所有步骤。
-    使用实际服务器IP进行配置，避免localhost带来的网络问题。
+    本脚本提供 GeoScene Enterprise (Server, Portal, DataStore, WebAdaptor)
+    的全自动安装部署，包括软件安装、授权、站点创建、门户初始化、
+    DataStore配置、主机名配置、域名映射、证书管理、WebAdaptor自动安装、
+    Portal-Server联合托管、JDK/Tomcat自动下载安装、多平台支持、幂等执行。
 
-依赖
-    - Linux x86_64 系统 (CentOS 7+/Ubuntu 18+/RHEL 7+)
-    - root 权限
-    - 至少 ${MIN_RAM_MB}MB 内存和 ${MIN_DISK_HOME_GB}GB 磁盘空间
-    - 端口 ${SERVER_PORT}, ${PORTAL_PORT}, ${DATASTORE_PORT}, 9876, 9877 可用
-
-配置变量
-    用户和目录:
-        GS_USER      - GeoScene 运行用户 (默认: geoscene)
-        GS_GROUP     - GeoScene 用户组 (默认: geoscene)
-        GS_HOME      - 用户 home 目录 (默认: /home/geoscene)
-        GS_BASE      - 安装基础目录 (默认: /home/geoscene/geoscene)
-    
-    端口配置:
-        SERVER_PORT      - Server HTTPS 端口 (默认: 6443)
-        PORTAL_PORT      - Portal HTTPS 端口 (默认: 7443)
-        DATASTORE_PORT   - DataStore HTTPS 端口 (默认: 2443)
-    
-    管理员账户:
-        SITE_ADMIN_USER     - Server 站点管理员 (默认: siteadmin)
-        SITE_ADMIN_PASS     - Server 站点密码 (默认: YourPassword123)
-        PORTAL_ADMIN_USER   - Portal 管理员 (默认: portaladmin)
-        PORTAL_ADMIN_PASS   - Portal 密码 (默认: YourPassword123)
-        PORTAL_ADMIN_EMAIL  - Portal 管理员邮箱
-        PORTAL_ADMIN_FN     - Portal 管理员名
-        PORTAL_ADMIN_LN     - Portal 管理员姓
-        PORTAL_ADMIN_QI     - Portal 安全问题ID
-        PORTAL_ADMIN_QA     - Portal 安全问题答案
-    
-    资源要求:
-        MIN_RAM_MB         - 最小内存 MB (默认: 8192)
-        MIN_CPU_CORES      - 最小CPU核数 (默认: 4)
-        MIN_DISK_HOME_GB   - home目录磁盘 GB (默认: 20)
-        MIN_DISK_INSTALL_GB - 安装目录磁盘 GB (默认: 30)
-
-文件
-    安装包 (必需):
-        GeoScene_Server_Linux_*.tar.gz     - Server 安装包
-        GeoScene_Portal_Linux_*.tar.gz     - Portal 安装包
-        GeoScene_DataStore_Linux_*.tar.gz  - DataStore 安装包
-
-    授权文件 (必需，用于自动化配置):
-        *server*.prvc 或 *.ecp             - Server 授权文件
-        *portal*.json 或 *enterprise*.json - Portal 授权文件
-
-    配置文件 (可选):
-        geoscene.conf                      - 所有配置变量
+必需组件 (v7.0)
+    - Server安装包 (GeoScene_Server_Linux_*.tar.gz)
+    - Portal安装包 (GeoScene_Portal_Linux_*.tar.gz)
+    - DataStore安装包 (GeoScene_DataStore_Linux_*.tar.gz)
+    - WebAdaptor安装包 (GeoScene_Web_Adaptor_java_Linux_*.tar.gz)
+    - Server授权文件 (*.prvc 或 *.ecp)
+    - Portal授权文件 (*portal*.json 或 *enterprise*.json)
 
 工作流程
-    1. 前置校验 (权限、资源、端口)
-    2. 系统配置 (用户、防火墙、limits)
-    3. 软件安装 (解压、Setup 静默安装)
-    4. Server 授权 (authorizeSoftware)
-    5. Server 站点创建 (createsite.sh)
-    6. Portal 门户创建 (createportal.sh)
-    7. Portal 授权导入 (授权文件已在门户创建时导入)
-    8. DataStore 配置 (configuredatastore.sh)
-
-日志
-    /var/log/geoscene_YYYYMMDD_HHMMSS.log
-
-作者
-    GeoScene Installer Team
+    1. 前置校验 (权限、资源、端口、架构)
+    2. 系统配置 (用户、防火墙、limits、systemd、hostname、hosts)
+    3. 自动下载JDK和Tomcat (Adoptium/Apache官方源)
+    4. 创建自签名SSL证书
+    5. 安装Server、Portal、DataStore、WebAdaptor
+    6. Server授权和站点创建
+    7. DataStore配置
+    8. Portal门户创建
+    9. WebAdaptor配置和联合托管
 
 版本历史
-    v5.1 - 增强稳定性：添加重试逻辑、状态检测、等待机制优化
-    v5.0 - 全自动化配置，使用实际IP，异常提示浏览器处理
-
-SEE ALSO
-    uninstall-geoscene.sh(1)
-
-BUGS
-    反馈问题请联系技术支持
-"
+    v7.0 - 新增: JDK/Tomcat自动下载、幂等执行、多平台支持、架构检查
+    v6.0 - 新增: 主机名/FQDN配置、证书管理、WebAdaptor、联合托管
+    v5.1 - 增强稳定性
+    v5.0 - 全自动化配置
+EOF
 }
 
 #==============================================================================
-# 解析命令行参数（先解析 --config 以便尽早加载配置）
+# 解析命令行参数
 #==============================================================================
 for arg in "$@"; do
-    [[ "$arg" == "--dry-run" || "$arg" == "-n" ]] && DRY_RUN=true
-    [[ "$arg" == "--help" || "$arg" == "-h" ]] && { show_help; exit 0; }
-    [[ "$arg" == "--man" ]] && { show_man; exit 0; }
-    [[ "$arg" == "--skip-config" ]] && SKIP_CONFIG=true
-    [[ "$arg" =~ ^--config= ]] && CONFIG_FILE="${arg#*=}"
-    [[ "$arg" =~ ^--gs-user= ]] && GS_USER="${arg#*=}"
-    [[ "$arg" =~ ^--gs-base= ]] && GS_BASE="${arg#*=}"
+    case "$arg" in
+        --dry-run|-n) DRY_RUN=true ;;
+        --help|-h) show_help; exit 0 ;;
+        --man) show_man; exit 0 ;;
+        --skip-config) SKIP_CONFIG=true ;;
+        --skip-hostname) SKIP_HOSTNAME=true ;;
+        --config=*) CONFIG_FILE="${arg#*=}" ;;
+        --gs-user=*) GS_USER="${arg#*=}" ;;
+        --gs-base=*) GS_BASE="${arg#*=}" ;;
+        --fqdn=*) FQDN="${arg#*=}" ;;
+        --hostname=*) HOSTNAME="${arg#*=}" ;;
+        --jdk-version=*) JDK_VERSION="${arg#*=}" ;;
+        --tomcat-version=*) TOMCAT_VERSION="${arg#*=}" ;;
+        --create-cert) CREATE_SELF_SIGNED_CERT=true ;;
+        --configure-federation) CONFIGURE_FEDERATION=true ;;
+    esac
 done
 
 #==============================================================================
-# 加载配置文件（覆盖默认值）
+# 加载配置文件
 #==============================================================================
 load_config_from_file() {
     local conf_path="$SCRIPT_DIR/$DEFAULT_CONFIG"
     [[ -n "$CONFIG_FILE" ]] && conf_path="$CONFIG_FILE"
-    
+
     if [[ -f "$conf_path" ]]; then
         echo "[INFO] 加载配置文件: $conf_path"
         while IFS='=' read -r key value || [[ -n "$key" ]]; do
@@ -236,28 +203,50 @@ load_config_from_file() {
             value="${value%\"*}"; value="${value#*\"}"
             value="${value%\'}"; value="${value#*\'}"
             value=$(echo "$value" | sed 's/^ *//;s/ *$//')
-            
+
             case "$key" in
-                GS_USER)               [[ -n "$value" ]] && GS_USER="$value" ;;
-                GS_GROUP)              [[ -n "$value" ]] && GS_GROUP="$value" ;;
-                GS_HOME)               [[ -n "$value" ]] && GS_HOME="$value" ;;
-                GS_BASE)               [[ -n "$value" ]] && GS_BASE="$value" ;;
-                SERVER_PORT)           [[ -n "$value" ]] && SERVER_PORT="$value" ;;
-                PORTAL_PORT)           [[ -n "$value" ]] && PORTAL_PORT="$value" ;;
-                DATASTORE_PORT)        [[ -n "$value" ]] && DATASTORE_PORT="$value" ;;
-                SITE_ADMIN_USER)       [[ -n "$value" ]] && SITE_ADMIN_USER="$value" ;;
-                SITE_ADMIN_PASS)       [[ -n "$value" ]] && SITE_ADMIN_PASS="$value" ;;
-                PORTAL_ADMIN_USER)     [[ -n "$value" ]] && PORTAL_ADMIN_USER="$value" ;;
-                PORTAL_ADMIN_PASS)     [[ -n "$value" ]] && PORTAL_ADMIN_PASS="$value" ;;
-                PORTAL_ADMIN_EMAIL)    [[ -n "$value" ]] && PORTAL_ADMIN_EMAIL="$value" ;;
-                PORTAL_ADMIN_FN)       [[ -n "$value" ]] && PORTAL_ADMIN_FN="$value" ;;
-                PORTAL_ADMIN_LN)       [[ -n "$value" ]] && PORTAL_ADMIN_LN="$value" ;;
-                PORTAL_ADMIN_QI)       [[ -n "$value" ]] && PORTAL_ADMIN_QI="$value" ;;
-                PORTAL_ADMIN_QA)       [[ -n "$value" ]] && PORTAL_ADMIN_QA="$value" ;;
-                MIN_RAM_MB)            [[ -n "$value" ]] && MIN_RAM_MB="$value" ;;
-                MIN_CPU_CORES)         [[ -n "$value" ]] && MIN_CPU_CORES="$value" ;;
-                MIN_DISK_HOME_GB)      [[ -n "$value" ]] && MIN_DISK_HOME_GB="$value" ;;
-                MIN_DISK_INSTALL_GB)   [[ -n "$value" ]] && MIN_DISK_INSTALL_GB="$value" ;;
+                GS_USER) GS_USER="$value" ;;
+                GS_GROUP) GS_GROUP="$value" ;;
+                GS_HOME) GS_HOME="$value" ;;
+                GS_BASE) GS_BASE="$value" ;;
+                SERVER_PORT) SERVER_PORT="$value" ;;
+                PORTAL_PORT) PORTAL_PORT="$value" ;;
+                DATASTORE_PORT) DATASTORE_PORT="$value" ;;
+                SITE_ADMIN_USER) SITE_ADMIN_USER="$value" ;;
+                SITE_ADMIN_PASS) SITE_ADMIN_PASS="$value" ;;
+                PORTAL_ADMIN_USER) PORTAL_ADMIN_USER="$value" ;;
+                PORTAL_ADMIN_PASS) PORTAL_ADMIN_PASS="$value" ;;
+                PORTAL_ADMIN_EMAIL) PORTAL_ADMIN_EMAIL="$value" ;;
+                PORTAL_ADMIN_FN) PORTAL_ADMIN_FN="$value" ;;
+                PORTAL_ADMIN_LN) PORTAL_ADMIN_LN="$value" ;;
+                PORTAL_ADMIN_QI) PORTAL_ADMIN_QI="$value" ;;
+                PORTAL_ADMIN_QA) PORTAL_ADMIN_QA="$value" ;;
+                MIN_RAM_MB) MIN_RAM_MB="$value" ;;
+                MIN_CPU_CORES) MIN_CPU_CORES="$value" ;;
+                MIN_DISK_HOME_GB) MIN_DISK_HOME_GB="$value" ;;
+                MIN_DISK_INSTALL_GB) MIN_DISK_INSTALL_GB="$value" ;;
+                HOSTNAME) HOSTNAME="$value" ;;
+                FQDN) FQDN="$value" ;;
+                CONFIGURE_HOSTNAME) [[ "$value" == "true" ]] && CONFIGURE_HOSTNAME=true || CONFIGURE_HOSTNAME=false ;;
+                CONFIGURE_HOSTS) [[ "$value" == "true" ]] && CONFIGURE_HOSTS=true || CONFIGURE_HOSTS=false ;;
+                INSTALL_WEBADAPTOR) [[ "$value" == "true" ]] && INSTALL_WEBADAPTOR=true || INSTALL_WEBADAPTOR=false ;;
+                TOMCAT_HOME) TOMCAT_HOME="$value" ;;
+                JDK_HOME) JDK_HOME="$value" ;;
+                JDK_VERSION) JDK_VERSION="$value" ;;
+                TOMCAT_VERSION) TOMCAT_VERSION="$value" ;;
+                WEBADAPTOR_PORT) WEBADAPTOR_PORT="$value" ;;
+                WEBADAPTOR_CONTEXT) WEBADAPTOR_CONTEXT="$value" ;;
+                CREATE_SELF_SIGNED_CERT) [[ "$value" == "true" ]] && CREATE_SELF_SIGNED_CERT=true || CREATE_SELF_SIGNED_CERT=false ;;
+                CERT_COUNTRY) CERT_COUNTRY="$value" ;;
+                CERT_STATE) CERT_STATE="$value" ;;
+                CERT_CITY) CERT_CITY="$value" ;;
+                CERT_ORG) CERT_ORG="$value" ;;
+                CERT_OU) CERT_OU="$value" ;;
+                CERT_EMAIL) CERT_EMAIL="$value" ;;
+                CERT_DAYS) CERT_DAYS="$value" ;;
+                CERT_PASSWORD) CERT_PASSWORD="$value" ;;
+                CONFIGURE_FEDERATION) [[ "$value" == "true" ]] && CONFIGURE_FEDERATION=true || CONFIGURE_FEDERATION=false ;;
+                AUTO_DOWNLOAD) [[ "$value" == "true" ]] && AUTO_DOWNLOAD=true || AUTO_DOWNLOAD=false ;;
             esac
         done < "$conf_path"
         echo "[SUCCESS] 配置文件已加载"
@@ -266,25 +255,39 @@ load_config_from_file() {
 
 load_config_from_file
 
-#==============================================================================
-# 再次解析命令行参数（覆盖配置文件）
-#==============================================================================
+# 重新解析命令行参数（覆盖配置文件）
 for arg in "$@"; do
-    [[ "$arg" =~ ^--gs-user= ]] && GS_USER="${arg#*=}"
-    [[ "$arg" =~ ^--gs-base= ]] && GS_BASE="${arg#*=}"
+    case "$arg" in
+        --gs-user=*) GS_USER="${arg#*=}" ;;
+        --gs-base=*) GS_BASE="${arg#*=}" ;;
+        --fqdn=*) FQDN="${arg#*=}" ;;
+        --hostname=*) HOSTNAME="${arg#*=}" ;;
+        --tomcat-home=*) TOMCAT_HOME="${arg#*=}" ;;
+        --jdk-home=*) JDK_HOME="${arg#*=}" ;;
+        --jdk-version=*) JDK_VERSION="${arg#*=}" ;;
+        --tomcat-version=*) TOMCAT_VERSION="${arg#*=}" ;;
+    esac
 done
 
 #==============================================================================
-# 常量定义（基于配置后的变量）
+# 常量定义
 #==============================================================================
 readonly LOG_FILE="/var/log/geoscene_$(date +%Y%m%d_%H%M%S).log"
 readonly SILENT_FLAGS="-m silent -l yes"
 readonly STATE_FILE="/var/log/.geoscene_install_state"
 readonly LIMITS_CONF="/etc/security/limits.d/99-geoscene.conf"
-REQUIRED_PORTS=("$SERVER_PORT" "$PORTAL_PORT" "$DATASTORE_PORT" "9876" "9877")
+REQUIRED_PORTS=("$SERVER_PORT" "$PORTAL_PORT" "$DATASTORE_PORT" "9876" "9877" "443")
+
+# 设置默认值
+[[ -n "$JDK_VERSION" ]] || JDK_VERSION="17"
+[[ -n "$TOMCAT_VERSION" ]] || TOMCAT_VERSION="9.0.89"
+[[ -n "$JDK_HOME" ]] || JDK_HOME="$GS_BASE/jdk"
+[[ -n "$TOMCAT_HOME" ]] || TOMCAT_HOME="$GS_BASE/tomcat"
+WEBADAPTOR_SSL_DIR="$TOMCAT_HOME/ssl"
+WEBADAPTOR_CERT_PREFIX="webcert"
 
 #==============================================================================
-# 动态调整 GS_HOME 和 GS_BASE（如果只修改了 GS_USER）
+# 动态调整路径
 #==============================================================================
 if [[ "$GS_HOME" == "/home/geoscene" && "$GS_USER" != "geoscene" ]]; then
     GS_HOME="/home/$GS_USER"
@@ -293,52 +296,73 @@ if [[ "$GS_BASE" == "/home/geoscene/geoscene" && "$GS_USER" != "geoscene" ]]; th
     GS_BASE="$GS_HOME/geoscene"
 fi
 
+#==============================================================================
+# 日志和输出函数 - 清晰、规范、简约大方
+#==============================================================================
+
+# 基础日志函数 - 带时间戳，同时输出到终端和日志文件
 log() {
     local level="$1" color="$2" msg="$3"
     local ts; ts=$(date '+%Y-%m-%d %H:%M:%S')
     local plain="[$level] $ts $msg"
+    # 终端带颜色输出
     echo -e "\033[${color}m${plain}\033[0m"
-    echo "$plain" >> "$LOG_FILE"
+    # 日志文件纯文本输出
+    echo "$plain" >> "$LOG_FILE" 2>/dev/null || true
 }
-log_info()    { log "INFO"    "34" "$1"; }
-log_warn()    { log "WARN"    "33" "$1"; }
-log_error()   { log "ERROR"   "31" "$1"; }
-log_success() { log "SUCCESS" "32" "$1"; }
-log_dry()     { log "DRY-RUN" "36" "$1"; }
 
+# 日志级别函数
+log_info()    { log "INFO"    "34" "$1"; }  # 蓝色
+log_warn()    { log "WARN"    "33" "$1"; }  # 黄色
+log_error()   { log "ERROR"   "31" "$1"; }  # 红色
+log_success() { log "SUCCESS" "32" "$1"; }  # 绿色
+log_dry()     { log "DRY-RUN" "36" "$1"; }  # 青色
+
+#==============================================================================
+# 任务输出函数 - 层次清晰，视觉美观
+#==============================================================================
+
+# 任务标题 - 蓝色背景，醒目大方
 print_task_header() {
     local title="$1"
     echo ""
-    echo -e "\033[44;37m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-    echo -e "\033[44;37m  $title\033[0m"
-    echo -e "\033[44;37m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+    echo -e "\033[44;37m┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\033[0m"
+    echo -e "\033[44;37m┃  $title\033[0m"
+    echo -e "\033[44;37m┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\033[0m"
     echo ""
 }
 
+# 子任务 - 青色箭头，表示进行中
 print_subtask() {
     local title="$1"
-    echo -e "\033[36m  ▸ $title\033[0m"
+    echo -e "\033[36m  ▶ $title\033[0m"
     log_info "$title"
 }
 
+# 子任务成功 - 绿色勾选，简洁明了
 print_subtask_success() {
     local title="$1"
     echo -e "\033[32m  ✓ $title\033[0m"
     log_success "$title"
 }
 
+# 子任务警告 - 黄色感叹号，醒目但不突兀
 print_subtask_warn() {
     local title="$1"
     echo -e "\033[33m  ⚠ $title\033[0m"
     log_warn "$title"
 }
 
+# 子任务错误 - 红色叉号，清晰可见
 print_subtask_error() {
     local title="$1"
     echo -e "\033[31m  ✗ $title\033[0m"
     log_error "$title"
 }
 
+#==============================================================================
+# IP和主机名函数
+#==============================================================================
 detect_host_ip() {
     local ip=""
     ip=$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)
@@ -366,34 +390,27 @@ log_host_ip() {
     echo "$HOST_IP"
 }
 
+get_current_hostname() {
+    hostname -s 2>/dev/null || hostname 2>/dev/null || echo "localhost"
+}
+
+get_current_fqdn() {
+    hostname -f 2>/dev/null || hostname 2>/dev/null || echo "localhost"
+}
+
+#==============================================================================
+# 安装包扫描
+#==============================================================================
 trap 'find "$SCRIPT_DIR" -maxdepth 1 -type d -name "geoscene_inst_*" -exec rm -rf {} + 2>/dev/null || true' EXIT
 
 gs_install_dir() { echo "$GS_BASE/$1"; }
 is_installed()   { [[ -f "$(gs_install_dir "$1")/.geoscene_installed" ]]; }
 
-find_tool() {
-    local comp="$1" tool_name="$2"
-    local search_paths=(
-        "$GS_BASE/$comp/tools/$tool_name/$tool_name"
-        "$GS_BASE/$comp/tools/$tool_name"
-        "$GS_BASE/$comp/tools/bin/$tool_name"
-        "$GS_BASE/$comp/bin/$tool_name"
-        "$GS_BASE/$comp/$tool_name"
-    )
-    for path in "${search_paths[@]}"; do
-        if [[ -f "$path" && -x "$path" ]]; then
-            echo "$path"
-            return 0
-        fi
-    done
-    return 1
-}
+to_lower() { echo "$1" | tr '[:upper:]' '[:lower:]'; }
 
 declare -gA FOUND_INSTALLERS=()
 declare -gA FOUND_LICENSES=()
 declare -ga COMPONENT_QUEUE=()
-
-to_lower() { echo "$1" | tr '[:upper:]' '[:lower:]'; }
 
 scan_workspace() {
     FOUND_INSTALLERS=(); FOUND_LICENSES=(); COMPONENT_QUEUE=()
@@ -404,978 +421,1424 @@ scan_workspace() {
         local lower; lower=$(to_lower "$base")
 
         if [[ "$base" == *.tar.gz || "$base" == *.tgz ]]; then
-            [[ "$lower" == *server* ]] && { FOUND_INSTALLERS[server]="$f"; COMPONENT_QUEUE+=(server); }
-            [[ "$lower" == *portal* ]] && { FOUND_INSTALLERS[portal]="$f"; COMPONENT_QUEUE+=(portal); }
-            [[ "$lower" == *data* ]] && { FOUND_INSTALLERS[datastore]="$f"; COMPONENT_QUEUE+=(datastore); }
-        elif [[ "$base" == *.prvc || "$base" == *.json || "$base" == *.ecl || "$base" == *.lic || "$base" == *.ecp ]]; then
-            if [[ "$lower" == *portal* || "$lower" == *enterprise*portal* ]]; then
-                FOUND_LICENSES[portal]="$f"
-            elif [[ "$lower" == *server* || "$base" == *.prvc || "$base" == *.ecp ]]; then
-                FOUND_LICENSES[server]="$f"
-            elif [[ "$base" == *.json && ( "$lower" == *enterprise* || "$lower" == *portal* ) ]]; then
+            # Windows安装包检查
+            if [[ "$lower" == *windows* || "$lower" == *win* || "$lower" == *.exe || "$lower" == *.msi ]]; then
+                log_warn "检测到Windows安装包，跳过: $base"
+                continue
+            fi
+
+            # 架构检查
+            local pkg_arch=""
+            local sys_arch=$(uname -m)
+            [[ "$sys_arch" == "x86_64" ]] && sys_arch="x86_64"
+            [[ "$sys_arch" == "aarch64" || "$sys_arch" == "arm64" ]] && sys_arch="arm64"
+
+            if [[ "$lower" == *x64* || "$lower" == *x86_64* || "$lower" == *amd64* ]]; then
+                pkg_arch="x86_64"
+            elif [[ "$lower" == *arm64* || "$lower" == *aarch64* ]]; then
+                pkg_arch="arm64"
+            fi
+
+            if [[ -n "$pkg_arch" && "$pkg_arch" != "$sys_arch" ]]; then
+                log_warn "架构不匹配: $base ($pkg_arch) vs 系统 ($sys_arch)，跳过"
+                continue
+            fi
+
+            # 识别组件
+            if [[ "$lower" == *server* && ! "$lower" == *innovator* && ! "$lower" == *web* && ! "$lower" == *data* ]]; then
+                FOUND_INSTALLERS[server]="$f"; COMPONENT_QUEUE+=(server)
+            elif [[ "$lower" == *portal* ]]; then
+                FOUND_INSTALLERS[portal]="$f"; COMPONENT_QUEUE+=(portal)
+            elif [[ "$lower" == *data* ]]; then
+                FOUND_INSTALLERS[datastore]="$f"; COMPONENT_QUEUE+=(datastore)
+            elif [[ "$lower" == *web*adaptor* || "$lower" == *webadaptor* ]]; then
+                FOUND_INSTALLERS[webadaptor]="$f"; COMPONENT_QUEUE+=(webadaptor)
+            fi
+
+        elif [[ "$base" == *.prvc || "$base" == *.ecp ]]; then
+            FOUND_LICENSES[server]="$f"
+        elif [[ "$base" == *.json ]]; then
+            if [[ "$lower" == *portal* || "$lower" == *enterprise* ]]; then
                 FOUND_LICENSES[portal]="$f"
             fi
         fi
     done
 
     if [[ ${#COMPONENT_QUEUE[@]} -eq 0 ]]; then
-        log_error "未在 $SCRIPT_DIR 找到任何 GeoScene 安装包 (.tar.gz / .tgz)"
+        log_error "未找到任何 GeoScene 安装包 (.tar.gz)"
         exit 1
     fi
 
     log_info "发现组件: ${COMPONENT_QUEUE[*]}"
+
+    # v7.0: 检查必需组件
+    local has_server=false has_portal=false has_datastore=false has_webadaptor=false
     for comp in "${COMPONENT_QUEUE[@]}"; do
-        local pkg_name=$(basename "${FOUND_INSTALLERS[$comp]}")
-        local lic_status="无授权文件"
-        if [[ "$comp" == "datastore" ]]; then
-            lic_status="无需授权文件"
-        elif [[ -n "${FOUND_LICENSES[$comp]+_}" ]]; then
-            lic_status="授权文件: $(basename "${FOUND_LICENSES[$comp]}")"
-        fi
-        log_info "  [$comp]  $pkg_name  |  $lic_status"
+        case "$comp" in
+            server) has_server=true ;;
+            portal) has_portal=true ;;
+            datastore) has_datastore=true ;;
+            webadaptor) has_webadaptor=true ;;
+        esac
     done
-    
-    if [[ "$SKIP_CONFIG" == false ]]; then
-        if [[ -z "${FOUND_LICENSES[server]+_}" ]]; then
-            log_warn "缺少 Server 授权文件，自动化配置将无法执行"
-        fi
-        if [[ -z "${FOUND_LICENSES[portal]+_}" ]]; then
-            log_warn "缺少 Portal 授权文件，自动化配置将无法执行"
-        fi
+
+    if [[ "$has_server" == false ]]; then
+        log_error "缺少必需组件: Server"
+        exit 1
+    fi
+    if [[ "$has_portal" == false ]]; then
+        log_error "缺少必需组件: Portal"
+        exit 1
+    fi
+    if [[ "$has_datastore" == false ]]; then
+        log_warn "缺少组件: DataStore (v7.0: 推荐安装)"
+    fi
+    if [[ "$has_webadaptor" == false ]]; then
+        log_error "缺少必需组件: WebAdaptor (v7.0: WebAdaptor是必需组件)"
+        log_error "请下载: GeoScene_Web_Adaptor_java_Linux_*.tar.gz"
+        exit 1
+    fi
+
+    for comp in "${COMPONENT_QUEUE[@]}"; do
+        log_info "  [$comp] $(basename "${FOUND_INSTALLERS[$comp]}")"
+    done
+}
+
+#==============================================================================
+# 多平台包管理器
+#==============================================================================
+get_package_manager() {
+    if command -v apt-get &>/dev/null; then echo "apt"
+    elif command -v yum &>/dev/null; then echo "yum"
+    elif command -v dnf &>/dev/null; then echo "dnf"
+    elif command -v zypper &>/dev/null; then echo "zypper"
+    elif command -v pacman &>/dev/null; then echo "pacman"
+    else echo "unknown"
     fi
 }
 
+install_package() {
+    local pkg="$1"
+    local pm=$(get_package_manager)
+    case "$pm" in
+        apt) apt-get update && apt-get install -y "$pkg" ;;
+        yum) yum install -y "$pkg" ;;
+        dnf) dnf install -y "$pkg" ;;
+        zypper) zypper install -y "$pkg" ;;
+        pacman) pacman -S --noconfirm "$pkg" ;;
+        *) log_warn "未知的包管理器，无法安装 $pkg"; return 1 ;;
+    esac
+}
+
+#==============================================================================
+# 配置验证功能
+#==============================================================================
+validate_config() {
+    print_task_header "安装前配置验证"
+    local validation_passed=true
+
+    # 1. FQDN格式验证
+    if [[ -n "$FQDN" ]]; then
+        if [[ ! "$FQDN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$ ]]; then
+            log_error "FQDN格式无效: $FQDN"
+            validation_passed=false
+        else
+            print_subtask_success "FQDN格式验证通过: $FQDN"
+        fi
+    fi
+
+    # 2. 密码强度验证
+    validate_password() {
+        local pass="$1" name="$2"
+        local length=${#pass}
+        if [[ $length -lt 8 ]]; then
+            log_error "$name 密码长度不足8位"
+            return 1
+        fi
+        if [[ ! "$pass" =~ [A-Z] ]]; then
+            log_error "$name 密码必须包含大写字母"
+            return 1
+        fi
+        if [[ ! "$pass" =~ [a-z] ]]; then
+            log_error "$name 密码必须包含小写字母"
+            return 1
+        fi
+        if [[ ! "$pass" =~ [0-9] ]]; then
+            log_error "$name 密码必须包含数字"
+            return 1
+        fi
+        return 0
+    }
+
+    validate_password "$SITE_ADMIN_PASS" "Server管理员" || validation_passed=false
+    validate_password "$PORTAL_ADMIN_PASS" "Portal管理员" || validation_passed=false
+
+    # 3. 端口范围验证
+    validate_port() {
+        local port="$1" name="$2"
+        if [[ ! "$port" =~ ^[0-9]+$ ]] || [[ "$port" -lt 1 ]] || [[ "$port" -gt 65535 ]]; then
+            log_error "$name 端口无效: $port (必须是1-65535)"
+            return 1
+        fi
+        return 0
+    }
+
+    validate_port "$SERVER_PORT" "Server" || validation_passed=false
+    validate_port "$PORTAL_PORT" "Portal" || validation_passed=false
+    validate_port "$DATASTORE_PORT" "DataStore" || validation_passed=false
+
+    # 4. 路径验证
+    if [[ ! "$GS_HOME" =~ ^/ ]]; then
+        log_error "GS_HOME必须是绝对路径: $GS_HOME"
+        validation_passed=false
+    fi
+    if [[ ! "$GS_BASE" =~ ^/ ]]; then
+        log_error "GS_BASE必须是绝对路径: $GS_BASE"
+        validation_passed=false
+    fi
+
+    # 5. 邮箱格式验证
+    if [[ ! "$PORTAL_ADMIN_EMAIL" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+        log_error "Portal管理员邮箱格式无效: $PORTAL_ADMIN_EMAIL"
+        validation_passed=false
+    else
+        print_subtask_success "邮箱格式验证通过"
+    fi
+
+    # 6. 依赖命令检查
+    local required_commands=("curl" "tar" "hostname" "ip" "awk")
+    for cmd in "${required_commands[@]}"; do
+        if ! command -v "$cmd" &>/dev/null; then
+            log_error "缺少必需命令: $cmd"
+            validation_passed=false
+        fi
+    done
+    print_subtask_success "基础命令依赖检查通过"
+
+    # 7. 磁盘空间预检（更严格的检查）
+    local required_gb=$(( MIN_DISK_HOME_GB + MIN_DISK_INSTALL_GB + 10 ))  # 额外10GB缓冲
+    local avail_kb=$(df -k "$GS_HOME" 2>/dev/null | awk 'NR==2{print $4}')
+    local avail_gb=$(( avail_kb / 1048576 ))
+    if [[ "$avail_gb" -lt "$required_gb" ]]; then
+        log_warn "磁盘空间可能不足: ${avail_gb}GB可用，建议至少${required_gb}GB"
+    else
+        print_subtask_success "磁盘空间充足: ${avail_gb}GB"
+    fi
+
+    # 8. 内存检查
+    local ram_mb=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
+    if [[ "$ram_mb" -lt 8192 ]]; then
+        log_warn "内存低于推荐值: ${ram_mb}MB (推荐≥8192MB)"
+    else
+        print_subtask_success "内存检查通过: ${ram_mb}MB"
+    fi
+
+    if [[ "$validation_passed" == false ]]; then
+        log_error "配置验证失败，请修正以上错误后重试"
+        exit 1
+    fi
+
+    log_success "所有配置验证通过"
+}
+
+#==============================================================================
+# 备份功能
+#==============================================================================
+create_backup() {
+    [[ "$DRY_RUN" == true ]] && return 0
+
+    local backup_dir="$GS_HOME/.geoscene_backup/$(date +%Y%m%d_%H%M%S)"
+    mkdir -p "$backup_dir"
+
+    print_task_header "创建安装前备份"
+
+    # 备份现有配置
+    if [[ -f "$LIMITS_CONF" ]]; then
+        cp "$LIMITS_CONF" "$backup_dir/"
+        print_subtask "备份 limits.conf"
+    fi
+
+    if [[ -f "/etc/systemd/system.conf" ]]; then
+        cp "/etc/systemd/system.conf" "$backup_dir/"
+        print_subtask "备份 system.conf"
+    fi
+
+    if [[ -f "/etc/hosts" ]]; then
+        cp "/etc/hosts" "$backup_dir/"
+        print_subtask "备份 hosts"
+    fi
+
+    if [[ -f "/etc/hostname" ]]; then
+        cp "/etc/hostname" "$backup_dir/"
+        print_subtask "备份 hostname"
+    fi
+
+    # 备份现有GeoScene安装（如果存在）
+    for comp in server portal datastore; do
+        if [[ -d "$GS_BASE/$comp" ]]; then
+            local comp_backup="$backup_dir/${comp}_config"
+            mkdir -p "$comp_backup"
+            # 备份配置文件目录
+            if [[ -d "$GS_BASE/$comp/usr/config-store" ]]; then
+                cp -r "$GS_BASE/$comp/usr/config-store" "$comp_backup/" 2>/dev/null || true
+            fi
+            if [[ -d "$GS_BASE/$comp/usr/arcgisportal" ]]; then
+                cp -r "$GS_BASE/$comp/usr/arcgisportal" "$comp_backup/" 2>/dev/null || true
+            fi
+            print_subtask "备份 $comp 配置"
+        fi
+    done
+
+    # 保存备份信息
+    echo "BACKUP_TIME=$(date '+%Y-%m-%d %H:%M:%S')" > "$backup_dir/backup_info.txt"
+    echo "BACKUP_DIR=$backup_dir" >> "$backup_dir/backup_info.txt"
+
+    log_success "备份创建完成: $backup_dir"
+    echo "$backup_dir" > /tmp/geoscene_last_backup.txt
+}
+
+#==============================================================================
+# 回滚功能
+#==============================================================================
+rollback_installation() {
+    local backup_dir="$1"
+    if [[ -z "$backup_dir" ]] || [[ ! -d "$backup_dir" ]]; then
+        log_error "未找到有效的备份目录"
+        return 1
+    fi
+
+    print_task_header "执行回滚操作"
+
+    # 停止服务
+    for comp in server portal datastore; do
+        local stop_script="$GS_BASE/$comp/stop${comp}.sh"
+        [[ -f "$stop_script" ]] && runuser -u "$GS_USER" -- "$stop_script" 2>/dev/null || true
+    done
+
+    # 恢复配置
+    if [[ -f "$backup_dir/limits.conf" ]]; then
+        cp "$backup_dir/limits.conf" "$LIMITS_CONF"
+        print_subtask "恢复 limits.conf"
+    fi
+
+    if [[ -f "$backup_dir/system.conf" ]]; then
+        cp "$backup_dir/system.conf" "/etc/systemd/system.conf"
+        print_subtask "恢复 system.conf"
+    fi
+
+    if [[ -f "$backup_dir/hosts" ]]; then
+        cp "$backup_dir/hosts" "/etc/hosts"
+        print_subtask "恢复 hosts"
+    fi
+
+    if [[ -f "$backup_dir/hostname" ]]; then
+        cp "$backup_dir/hostname" "/etc/hostname"
+        hostname "$(cat /etc/hostname)" 2>/dev/null || true
+        print_subtask "恢复 hostname"
+    fi
+
+    systemctl daemon-reload 2>/dev/null || true
+
+    log_success "回滚完成"
+}
+
+#==============================================================================
+# 前置校验
+#==============================================================================
 check_prerequisites() {
     [[ $EUID -ne 0 ]] && { log_error "需 root 权限执行"; exit 1; }
 
-    local ram_mb cpu_cores
+    # 执行配置验证
+    validate_config
+
+    local ram_mb cpu_cores sys_arch
     ram_mb=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
     cpu_cores=$(nproc)
-    (( ram_mb   < MIN_RAM_MB )) && log_warn "内存 ${ram_mb}MB < ${MIN_RAM_MB}MB，仅建议测试环境"
-    (( cpu_cores < MIN_CPU_CORES )) && log_warn "CPU ${cpu_cores} 核 < ${MIN_CPU_CORES}核，可能影响性能"
+    sys_arch=$(uname -m)
 
+    (( ram_mb < MIN_RAM_MB )) && log_warn "内存 ${ram_mb}MB < ${MIN_RAM_MB}MB"
+    (( cpu_cores < MIN_CPU_CORES )) && log_warn "CPU ${cpu_cores}核 < ${MIN_CPU_CORES}核"
+
+    log_info "系统架构: $sys_arch, CPU: ${cpu_cores}核, 内存: ${ram_mb}MB"
+
+    # 磁盘检查
     _check_disk() {
-        local path="$1" req_gb="$2" check="$1"
-        while [[ ! -e "$check" && "$check" != "/" ]]; do check="$(dirname "$check")"; done
-        local avail_kb; avail_kb=$(df -k "$check" 2>/dev/null | awk 'NR==2{print $4}')
-        [[ -z "$avail_kb" || ! "$avail_kb" =~ ^[0-9]+$ ]] && { log_error "无法读取 $check 磁盘空间"; return 1; }
+        local path="$1" req_gb="$2"
+        local avail_kb; avail_kb=$(df -k "$path" 2>/dev/null | awk 'NR==2{print $4}')
+        [[ -z "$avail_kb" ]] && { log_error "无法读取 $path 磁盘空间"; return 1; }
         local avail_gb=$(( avail_kb / 1048576 ))
-        (( avail_gb < req_gb )) && { log_error "$path 可用 ${avail_gb}GB < 要求 ${req_gb}GB"; return 1; }
-        log_info "磁盘 $path: 可用 ${avail_gb}GB"
+        (( avail_gb < req_gb )) && { log_error "$path 可用 ${avail_gb}GB < ${req_gb}GB"; return 1; }
+        log_info "磁盘 $path: ${avail_gb}GB 可用"
     }
     _check_disk "$GS_HOME" "$MIN_DISK_HOME_GB" || exit 1
     _check_disk "$SCRIPT_DIR" "$MIN_DISK_INSTALL_GB" || exit 1
 
+    # 端口检查
     local conflict=false
     for port in "${REQUIRED_PORTS[@]}"; do
-        if ss -tulnH 2>/dev/null | awk '{print $5}' | grep -qE ":${port}$" || \
+        if ss -tulnH 2>/dev/null | grep -qE ":${port}$" || \
            netstat -tuln 2>/dev/null | grep -qE ":${port}[[:space:]]"; then
             log_error "端口 $port 已占用"
             conflict=true
         fi
     done
-    [[ "$conflict" == true ]] && { log_error "端口冲突，中止安装"; exit 1; }
+    [[ "$conflict" == true ]] && { log_error "端口冲突"; exit 1; }
 
-    log_success "前置校验通过  (CPU=${cpu_cores}核 RAM=${ram_mb}MB)"
+    log_success "前置校验通过"
 }
 
+#==============================================================================
+# 系统配置（幂等执行）
+#==============================================================================
 setup_system() {
     [[ "$DRY_RUN" == true ]] && { log_dry "跳过: 系统配置"; return 0; }
 
-    if ! getent group "$GS_GROUP" &>/dev/null; then groupadd "$GS_GROUP"; fi
-    if ! id "$GS_USER" &>/dev/null; then
-        useradd -m -s /bin/bash -g "$GS_GROUP" -d "$GS_HOME" "$GS_USER"
-        log_info "用户 $GS_USER 已创建 → $GS_HOME"
+    print_task_header "系统基础配置"
+
+    # 创建用户和组
+    if ! getent group "$GS_GROUP" &>/dev/null; then
+        groupadd "$GS_GROUP"
+        log_info "创建组: $GS_GROUP"
+    else
+        log_info "组已存在: $GS_GROUP"
     fi
 
-    cat > "$LIMITS_CONF" <<EOF
-# GeoScene Enterprise - managed by installer
+    if ! id "$GS_USER" &>/dev/null; then
+        useradd -m -s /bin/bash -g "$GS_GROUP" -d "$GS_HOME" "$GS_USER"
+        log_info "创建用户: $GS_USER"
+    else
+        log_info "用户已存在: $GS_USER"
+    fi
+
+    # 配置 limits.conf（幂等）
+    local limits_content="# GeoScene Enterprise - managed by installer
 $GS_USER soft nofile 65536
 $GS_USER hard nofile 65536
-$GS_USER soft nproc  32768
-$GS_USER hard nproc  32768
+$GS_USER soft nproc  25059
+$GS_USER hard nproc  25059"
+
+    if [[ -f "$LIMITS_CONF" ]]; then
+        cp "$LIMITS_CONF" "$LIMITS_CONF.bak.$(date +%Y%m%d%H%M%S)"
+    fi
+    echo "$limits_content" > "$LIMITS_CONF"
+    log_success "limits.conf 已配置 [幂等执行]"
+
+    # 配置 systemd system.conf（幂等）
+    local systemd_conf="/etc/systemd/system.conf"
+    if [[ -f "$systemd_conf" ]]; then
+        cp "$systemd_conf" "$systemd_conf.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+        if ! grep -q "^DefaultLimitNOFILE=65536" "$systemd_conf" 2>/dev/null || \
+           ! grep -q "^DefaultLimitNPROC=25059" "$systemd_conf" 2>/dev/null; then
+            sed -i '/^# GeoScene Enterprise/,/^$/d' "$systemd_conf"
+            cat >> "$systemd_conf" << EOF
+
+# GeoScene Enterprise Configuration
+DefaultLimitNOFILE=65536
+DefaultLimitNPROC=25059
 EOF
+            systemctl daemon-reload 2>/dev/null || true
+            log_success "systemd system.conf 已更新 [幂等执行]"
+        else
+            log_info "systemd 配置已存在 [幂等执行]"
+        fi
+    fi
 
     mkdir -p "$GS_BASE"
     chown "$GS_USER:$GS_GROUP" "$GS_BASE"
 
+    # 防火墙配置
     if command -v firewall-cmd &>/dev/null; then
         for p in "${REQUIRED_PORTS[@]}"; do
             firewall-cmd --permanent --add-port="${p}/tcp" &>/dev/null || true
         done
         firewall-cmd --reload &>/dev/null || true
-        log_info "防火墙已开放端口: ${REQUIRED_PORTS[*]}"
+        log_info "firewall-cmd 已开放端口"
+    elif command -v ufw &>/dev/null; then
+        for p in "${REQUIRED_PORTS[@]}"; do
+            ufw allow "${p}/tcp" &>/dev/null || true
+        done
+        log_info "ufw 已开放端口"
     fi
 
     echo "INSTALLED=$(date '+%Y-%m-%d %H:%M:%S')" > "$STATE_FILE"
-    log_success "系统配置完成"
+    log_success "系统基础配置完成 [幂等执行]"
 }
 
+#==============================================================================
+# 主机名和Hosts配置（幂等执行）
+#==============================================================================
+configure_hostname_and_hosts() {
+    [[ "$DRY_RUN" == true ]] && { log_dry "跳过: 主机名和hosts配置"; return 0; }
+    [[ "$SKIP_HOSTNAME" == true ]] && { log_info "跳过主机名配置"; return 0; }
+
+    print_task_header "主机名与域名配置 [幂等执行]"
+
+    local current_hostname=$(get_current_hostname)
+    local current_fqdn=$(get_current_fqdn)
+    local host_ip=$(get_host_ip)
+
+    print_subtask "当前主机名: $current_hostname, FQDN: $current_fqdn, IP: $host_ip"
+
+    # 自动检测或设置FQDN
+    if [[ -z "$FQDN" ]]; then
+        if [[ "$current_fqdn" != "localhost" && "$current_fqdn" != "localhost.localdomain" && "$current_fqdn" != "$current_hostname" ]]; then
+            FQDN="$current_fqdn"
+            log_info "自动检测到 FQDN: $FQDN"
+        else
+            FQDN="geoscene-$(echo "$host_ip" | tr '.' '-').local"
+            log_warn "未配置FQDN，使用默认值: $FQDN"
+        fi
+    fi
+
+    [[ -z "$HOSTNAME" ]] && HOSTNAME=$(echo "$FQDN" | cut -d'.' -f1)
+
+    # 配置主机名
+    if [[ "$CONFIGURE_HOSTNAME" == true && "$current_hostname" != "$HOSTNAME" ]]; then
+        print_subtask "设置主机名为: $HOSTNAME"
+        echo "$HOSTNAME" > /etc/hostname
+        hostname "$HOSTNAME" 2>/dev/null || hostnamectl set-hostname "$HOSTNAME" 2>/dev/null || true
+        log_success "主机名已设置: $HOSTNAME [幂等执行]"
+    fi
+
+    # 配置 hosts
+    if [[ "$CONFIGURE_HOSTS" == true ]]; then
+        print_subtask "配置 /etc/hosts..."
+        local hosts_file="/etc/hosts"
+        [[ -f "$hosts_file" ]] && cp "$hosts_file" "$hosts_file.bak.$(date +%Y%m%d%H%M%S)"
+
+        # 移除旧的相同IP条目
+        grep -v "^${host_ip}[[:space:]]" "$hosts_file" > "${hosts_file}.tmp" 2>/dev/null || cat "$hosts_file" > "${hosts_file}.tmp"
+
+        # 添加新的hosts条目
+        cat > "${hosts_file}.new" << EOF
+127.0.0.1   localhost localhost.localdomain localhost4 localhost4.localdomain4
+::1         localhost localhost.localdomain localhost6 localhost6.localdomain6
+
+# GeoScene Enterprise Configuration
+${host_ip}   ${FQDN} ${HOSTNAME}
+EOF
+        grep -v "^#" "${hosts_file}.tmp" | grep -v "^127\." | grep -v "^::" | grep -v "^${host_ip}[[:space:]]" >> "${hosts_file}.new" 2>/dev/null || true
+        mv "${hosts_file}.new" "$hosts_file"
+        rm -f "${hosts_file}.tmp"
+        log_success "/etc/hosts 已配置 [幂等执行]"
+    fi
+
+    log_success "主机名与域名配置完成 [幂等执行]"
+}
+
+#==============================================================================
+# JDK下载安装（Adoptium）
+#==============================================================================
+download_and_install_jdk() {
+    [[ "$DRY_RUN" == true ]] && { log_dry "跳过: JDK下载安装"; return 0; }
+    [[ "$AUTO_DOWNLOAD" == false ]] && { log_info "跳过JDK自动下载 (AUTO_DOWNLOAD=false)"; return 0; }
+
+    # 检查是否已安装
+    if [[ -d "$JDK_HOME" ]] && [[ -f "$JDK_HOME/bin/java" ]]; then
+        log_info "JDK 已存在，跳过下载 [幂等执行]"
+        return 0
+    fi
+
+    print_task_header "下载并安装 Adoptium JDK ${JDK_VERSION}"
+
+    local arch=$(uname -m)
+    local jvm_arch=""
+    case "$arch" in
+        x86_64) jvm_arch="x64" ;;
+        aarch64|arm64) jvm_arch="aarch64" ;;
+        *) log_error "不支持的架构: $arch"; return 1 ;;
+    esac
+
+    local jdk_url="${JDK_BASE_URL}/v3/binary/latest/${JDK_VERSION}/ga/linux/${jvm_arch}/jdk/hotspot/normal/eclipse"
+
+    print_subtask "下载JDK..."
+    mkdir -p "$JDK_HOME"
+    local jdk_tarball="/tmp/jdk-${JDK_VERSION}-${jvm_arch}.tar.gz"
+
+    local download_success=false
+    if command -v curl &>/dev/null; then
+        curl -fSL --retry 3 "$jdk_url" -o "$jdk_tarball" 2>/dev/null && download_success=true
+    elif command -v wget &>/dev/null; then
+        wget --tries=3 "$jdk_url" -O "$jdk_tarball" 2>/dev/null && download_success=true
+    fi
+
+    if [[ "$download_success" == false ]] || [[ ! -s "$jdk_tarball" ]]; then
+        log_error "JDK下载失败"
+        rm -f "$jdk_tarball"
+        return 1
+    fi
+
+    print_subtask "解压JDK..."
+    rm -rf "$JDK_HOME"/* 2>/dev/null || true
+    if ! tar -xzf "$jdk_tarball" -C "$JDK_HOME" --strip-components=1; then
+        log_error "JDK解压失败"
+        rm -f "$jdk_tarball"
+        return 1
+    fi
+    rm -f "$jdk_tarball"
+
+    chown -R "$GS_USER:$GS_GROUP" "$JDK_HOME"
+
+    # 配置环境变量
+    cat > /etc/profile.d/geoscene-jdk.sh << EOF
+export JAVA_HOME=$JDK_HOME
+export PATH=\$JAVA_HOME/bin:\$PATH
+EOF
+    export JAVA_HOME="$JDK_HOME"
+    export PATH="$JDK_HOME/bin:$PATH"
+
+    local java_version=$("$JDK_HOME/bin/java" -version 2>&1 | head -1)
+    log_success "JDK安装完成: $java_version [幂等执行]"
+}
+
+#==============================================================================
+# Tomcat下载安装
+#==============================================================================
+download_and_install_tomcat() {
+    [[ "$DRY_RUN" == true ]] && { log_dry "跳过: Tomcat下载安装"; return 0; }
+    [[ "$AUTO_DOWNLOAD" == false ]] && { log_info "跳过Tomcat自动下载 (AUTO_DOWNLOAD=false)"; return 0; }
+
+    # 检查是否已安装
+    if [[ -d "$TOMCAT_HOME" ]] && [[ -f "$TOMCAT_HOME/bin/catalina.sh" ]]; then
+        log_info "Tomcat 已存在，跳过下载 [幂等执行]"
+        return 0
+    fi
+
+    print_task_header "下载并安装 Apache Tomcat ${TOMCAT_VERSION}"
+
+    local tomcat_url="${TOMCAT_BASE_URL}/v${TOMCAT_VERSION}/bin/apache-tomcat-${TOMCAT_VERSION}.tar.gz"
+    local tomcat_tarball="/tmp/apache-tomcat-${TOMCAT_VERSION}.tar.gz"
+
+    print_subtask "下载Tomcat..."
+    mkdir -p "$TOMCAT_HOME"
+
+    local download_success=false
+    if command -v curl &>/dev/null; then
+        curl -fSL --retry 3 "$tomcat_url" -o "$tomcat_tarball" 2>/dev/null && download_success=true
+    elif command -v wget &>/dev/null; then
+        wget --tries=3 "$tomcat_url" -O "$tomcat_tarball" 2>/dev/null && download_success=true
+    fi
+
+    if [[ "$download_success" == false ]] || [[ ! -s "$tomcat_tarball" ]]; then
+        log_error "Tomcat下载失败"
+        rm -f "$tomcat_tarball"
+        return 1
+    fi
+
+    print_subtask "解压Tomcat..."
+    if ! tar -xzf "$tomcat_tarball" -C "$TOMCAT_HOME" --strip-components=1; then
+        log_error "Tomcat解压失败"
+        rm -f "$tomcat_tarball"
+        return 1
+    fi
+    rm -f "$tomcat_tarball"
+
+    # Tomcat安全加固
+    print_subtask "应用Tomcat安全配置..."
+    rm -rf "$TOMCAT_HOME/webapps/"* 2>/dev/null || true
+
+    local server_xml="$TOMCAT_HOME/conf/server.xml"
+    if [[ -f "$server_xml" ]]; then
+        cp "$server_xml" "${server_xml}.bak.$(date +%Y%m%d%H%M%S)"
+        sed -i 's/<Connector port="8080"/<Connector port="-1" disabled="true"/g' "$server_xml"
+        sed -i 's/<Connector port="8009"/<Connector port="-1" disabled="true"/g' "$server_xml"
+        log_success "Tomcat安全配置已应用 [幂等执行]"
+    fi
+
+    chown -R "$GS_USER:$GS_GROUP" "$TOMCAT_HOME"
+    log_success "Tomcat安装完成 [幂等执行]"
+}
+
+#==============================================================================
+# 证书创建
+#==============================================================================
+create_self_signed_certificate() {
+    [[ "$DRY_RUN" == true ]] && { log_dry "跳过: 创建证书"; return 0; }
+    [[ "$CREATE_SELF_SIGNED_CERT" == false ]] && { return 0; }
+
+    # 检查是否已存在
+    local pfx_file="$WEBADAPTOR_SSL_DIR/${WEBADAPTOR_CERT_PREFIX}.pfx"
+    if [[ -f "$pfx_file" ]]; then
+        log_info "证书已存在，跳过创建 [幂等执行]"
+        return 0
+    fi
+
+    print_task_header "创建自签名SSL证书 [幂等执行]"
+
+    if ! command -v openssl &>/dev/null; then
+        install_package openssl || { log_error "无法安装openssl"; return 1; }
+    fi
+
+    local host_ip=$(get_host_ip)
+    local fqdn_to_use="${FQDN:-$host_ip}"
+
+    mkdir -p "$WEBADAPTOR_SSL_DIR"
+    chown "$GS_USER:$GS_GROUP" "$WEBADAPTOR_SSL_DIR"
+
+    local key_file="$WEBADAPTOR_SSL_DIR/${WEBADAPTOR_CERT_PREFIX}.key"
+    local csr_file="$WEBADAPTOR_SSL_DIR/${WEBADAPTOR_CERT_PREFIX}.csr"
+    local crt_file="$WEBADAPTOR_SSL_DIR/${WEBADAPTOR_CERT_PREFIX}.crt"
+
+    openssl genrsa -out "$key_file" 2048 2>/dev/null
+    openssl req -new -key "$key_file" -out "$csr_file" \
+        -subj "/C=${CERT_COUNTRY}/ST=${CERT_STATE}/L=${CERT_CITY}/O=${CERT_ORG}/OU=${CERT_OU}/CN=${fqdn_to_use}/emailAddress=${CERT_EMAIL}" 2>/dev/null
+
+    echo "subjectAltName=DNS.1:${fqdn_to_use}" > "$WEBADAPTOR_SSL_DIR/cert_extensions"
+    openssl x509 -req -sha256 -in "$csr_file" -signkey "$key_file" \
+        -extfile "$WEBADAPTOR_SSL_DIR/cert_extensions" -out "$crt_file" -days "$CERT_DAYS" 2>/dev/null
+
+    openssl pkcs12 -inkey "$key_file" -in "$crt_file" -export \
+        -out "$pfx_file" -password pass:"$CERT_PASSWORD" 2>/dev/null
+
+    chown "$GS_USER:$GS_GROUP" "$pfx_file"
+    chmod 600 "$pfx_file"
+    rm -f "$csr_file" "$WEBADAPTOR_SSL_DIR/cert_extensions"
+
+    log_success "自签名证书创建完成 [幂等执行]"
+}
+
+#==============================================================================
+# 组件安装（幂等）
+#==============================================================================
 install_component() {
     local comp="$1" tarball="$2"
 
     if is_installed "$comp"; then
-        log_info "$comp 已安装，跳过"
+        log_info "$comp 已安装，跳过 [幂等执行]"
         return 0
     fi
 
-    local size; size=$(du -sh "$tarball" 2>/dev/null | cut -f1 || echo '?')
-    print_task_header "安装 $comp ($size)"
+    print_task_header "安装 $comp"
     [[ "$DRY_RUN" == true ]] && { log_dry "跳过: 安装 $comp"; return 0; }
+
+    local base_name=$(basename "$tarball")
+    local lower=$(to_lower "$base_name")
+
+    # Windows检查
+    if [[ "$lower" == *windows* || "$lower" == *win* || "$lower" == *.exe ]]; then
+        log_error "检测到Windows安装包: $base_name"
+        return 1
+    fi
+
+    # 架构检查
+    local sys_arch=$(uname -m)
+    [[ "$sys_arch" == "aarch64" ]] && sys_arch="arm64"
+    local pkg_arch=""
+    [[ "$lower" == *x64* || "$lower" == *x86_64* ]] && pkg_arch="x86_64"
+    [[ "$lower" == *arm64* || "$lower" == *aarch64* ]] && pkg_arch="arm64"
+
+    if [[ -n "$pkg_arch" && "$pkg_arch" != "$sys_arch" ]]; then
+        log_error "架构不匹配: $base_name ($pkg_arch) vs 系统 ($sys_arch)"
+        return 1
+    fi
 
     local extract_dir="$SCRIPT_DIR/geoscene_inst_${comp}"
     rm -rf "$extract_dir"; mkdir -p "$extract_dir"
 
     print_subtask "解压安装包..."
-    if ! tar -xzf "$tarball" -C "$extract_dir" 2>&1 | tee -a "$LOG_FILE"; then
-        print_subtask_error "解压失败: $(basename "$tarball")"
-        rm -rf "$extract_dir"; return 1
+    if ! tar -xzf "$tarball" -C "$extract_dir"; then
+        log_error "解压失败: $base_name"
+        rm -rf "$extract_dir"
+        return 1
     fi
-    print_subtask_success "解压完成"
 
     chown -R "$GS_USER:$GS_GROUP" "$extract_dir"
 
-    local installer
-    installer=$(find "$extract_dir" -maxdepth 3 -type f \
-        \( -iname "Setup" -o -iname "setup" -o -iname "setup.sh" \) \
-        -executable 2>/dev/null | head -n1)
-    [[ -z "$installer" ]] && {
-        print_subtask_error "未找到安装入口 (Setup/setup/setup.sh)"
-        rm -rf "$extract_dir"; return 1
-    }
+    local installer=$(find "$extract_dir" -maxdepth 3 -type f \( -iname "Setup" -o -iname "setup.sh" \) -executable 2>/dev/null | head -n1)
+    [[ -z "$installer" ]] && { log_error "未找到安装入口"; rm -rf "$extract_dir"; return 1; }
 
     print_subtask "执行静默安装..."
-    local rc=0
-    runuser -u "$GS_USER" -- bash -c \
-        "cd '$(dirname "$installer")' && './$(basename "$installer")' $SILENT_FLAGS" \
-        2>&1 | tee -a "$LOG_FILE" || rc=${PIPESTATUS[0]}
+    if ! runuser -u "$GS_USER" -- bash -c "cd '$(dirname "$installer")' && './$(basename "$installer")' $SILENT_FLAGS"; then
+        log_error "$comp 安装失败"
+        rm -rf "$extract_dir"
+        return 1
+    fi
 
     rm -rf "$extract_dir"
-
-    if [[ $rc -eq 0 ]]; then
-        touch "$(gs_install_dir "$comp")/.geoscene_installed"
-        print_subtask_success "$comp 安装完成"
-    else
-        print_subtask_error "$comp 安装失败 (exit $rc)"
-        return 1
-    fi
+    touch "$(gs_install_dir "$comp")/.geoscene_installed"
+    log_success "$comp 安装完成 [幂等执行]"
 }
 
+#==============================================================================
+# 授权文件复制（幂等）
+#==============================================================================
 copy_license_files() {
     local copied=0
-    
-    for comp in "${COMPONENT_QUEUE[@]}"; do
-        [[ "$comp" == "datastore" ]] && continue
-        
-        if [[ -n "${FOUND_LICENSES[$comp]+_}" ]]; then
-            [[ "$DRY_RUN" == true ]] && { log_dry "跳过: 复制 $comp 授权文件"; continue; }
-            
-            local lic_file="${FOUND_LICENSES[$comp]}"
-            local lic_name=$(basename "$lic_file")
-            local lic_dest="$GS_HOME/$lic_name"
-            
-            cp "$lic_file" "$lic_dest" 2>/dev/null || true
-            chown "$GS_USER:$GS_GROUP" "$lic_dest" 2>/dev/null || true
-            chmod 644 "$lic_dest" 2>/dev/null || true
-            
-            print_subtask "复制 $comp 授权文件: $lic_dest"
-            (( copied++ )) || true
-            
-            case "$comp" in
-                server)
-                    local server_lic_dir="$GS_BASE/server/usr"
-                    if [[ -d "$server_lic_dir" ]]; then
-                        cp "$lic_dest" "$server_lic_dir/$lic_name" 2>/dev/null || true
-                        chown "$GS_USER:$GS_GROUP" "$server_lic_dir/$lic_name" 2>/dev/null || true
-                        print_subtask_success "Server usr 目录副本"
-                    fi
-                    ;;
-                portal)
-                    local portal_lic_dir="$GS_BASE/portal/usr"
-                    if [[ -d "$portal_lic_dir" ]]; then
-                        cp "$lic_dest" "$portal_lic_dir/$lic_name" 2>/dev/null || true
-                        chown "$GS_USER:$GS_GROUP" "$portal_lic_dir/$lic_name" 2>/dev/null || true
-                        print_subtask_success "Portal usr 目录副本"
-                    fi
-                    ;;
-            esac
+
+    for comp in server portal; do
+        [[ -z "${FOUND_LICENSES[$comp]+_}" ]] && continue
+        [[ "$DRY_RUN" == true ]] && continue
+
+        local lic_file="${FOUND_LICENSES[$comp]}"
+        local lic_name=$(basename "$lic_file")
+        local lic_dest="$GS_HOME/$lic_name"
+
+        # 幂等检查
+        if [[ -f "$lic_dest" ]] && diff -q "$lic_file" "$lic_dest" &>/dev/null; then
+            log_info "授权文件已存在: $lic_name [幂等执行]"
+            continue
         fi
+
+        cp "$lic_file" "$lic_dest"
+        chown "$GS_USER:$GS_GROUP" "$lic_dest"
+        chmod 644 "$lic_dest"
+        print_subtask "复制授权: $lic_name [幂等执行]"
+        (( copied++ )) || true
     done
-    
-    if [[ $copied -gt 0 ]]; then
-        print_subtask_success "授权文件复制完成 ($copied 个)"
-    fi
+
+    [[ $copied -gt 0 ]] && log_success "授权文件复制完成 ($copied 个) [幂等执行]"
 }
 
+#==============================================================================
+# Server 操作
+#==============================================================================
 start_server() {
-    [[ "$DRY_RUN" == true ]] && { log_dry "跳过: 启动 Server"; return 0; }
-    
+    [[ "$DRY_RUN" == true ]] && return 0
     local start_script="$GS_BASE/server/startserver.sh"
-    if [[ ! -f "$start_script" ]]; then
-        print_subtask_warn "未找到 Server 启动脚本"
-        return 1
-    fi
-    
-    if check_server_running; then
-        print_subtask_success "Server 已在运行"
+    [[ ! -f "$start_script" ]] && return 1
+
+    if pgrep -f "geoscene.*server" &>/dev/null; then
+        log_info "Server 已在运行 [幂等执行]"
         return 0
     fi
-    
+
     print_subtask "启动 GeoScene Server..."
-    runuser -u "$GS_USER" -- "$start_script" 2>&1 | tee -a "$LOG_FILE" || true
-    
+    runuser -u "$GS_USER" -- "$start_script" || true
+
     local max_wait=120 elapsed=0
     while [[ $elapsed -lt $max_wait ]]; do
-        if check_server_running; then
-            print_subtask_success "Server 已就绪"
+        if curl -sk "https://$(get_host_ip):${SERVER_PORT}/geoscene/rest/info" &>/dev/null; then
+            log_success "Server 已就绪 [幂等执行]"
             return 0
         fi
         sleep 5; elapsed=$((elapsed + 5))
-        log_info "等待 Server 就绪... ($elapsed/$max_wait 秒)"
     done
-    print_subtask_warn "Server 启动超时（进程可能仍在运行）"
-    return 1
-}
-
-check_server_running() {
-    local server_proc="$GS_BASE/server"
-    if pgrep -f "geoscene.*server" &>/dev/null || \
-       [[ -f "$server_proc/usr/logs/server.pid" ]] || \
-       curl -sk "https://$(get_host_ip):${SERVER_PORT}/geoscene/rest/info" &>/dev/null; then
-        return 0
-    fi
+    log_warn "Server 启动超时"
     return 1
 }
 
 check_server_initialized() {
     local host_ip=$(get_host_ip)
-    local token=""
-    
-    token=$(curl -sk -X POST "https://${host_ip}:${SERVER_PORT}/geoscene/admin/generateToken" \
-        -d "username=$SITE_ADMIN_USER" \
-        -d "password=$SITE_ADMIN_PASS" \
-        -d "client=requestip" \
-        -d "f=json" 2>/dev/null | grep -oP '"token":"[^"]+' | cut -d'"' -f4)
-    
-    [[ -n "$token" ]] && return 0
-    return 1
-}
-
-check_datastore_ready() {
-    local host_ip=$(get_host_ip)
-    local response
-    response=$(curl -sk "https://${host_ip}:${DATASTORE_PORT}/geoscene/datastoreadmin/configure?f=json" 2>/dev/null)
-    
-    if echo "$response" | grep -qiE '"status"|configure' || curl -sk "https://${host_ip}:${DATASTORE_PORT}/geoscene/datastore" &>/dev/null; then
-        return 0
-    fi
-    return 1
+    local token=$(curl -sk -X POST "https://${host_ip}:${SERVER_PORT}/geoscene/admin/generateToken" \
+        -d "username=$SITE_ADMIN_USER" -d "password=$SITE_ADMIN_PASS" \
+        -d "client=requestip" -d "f=json" 2>/dev/null | grep -oP '"token":"[^"]+' | cut -d'"' -f4)
+    [[ -n "$token" ]]
 }
 
 authorize_server() {
-    [[ "$DRY_RUN" == true ]] && { log_dry "跳过: Server 授权"; return 0; }
-    [[ "$SKIP_CONFIG" == true ]] && { log_info "跳过自动化配置"; return 0; }
-    
-    if [[ -z "${FOUND_LICENSES[server]+_}" ]]; then
-        print_subtask_warn "缺少 Server 授权文件，请浏览器手动授权"
-        return 1
+    [[ "$DRY_RUN" == true ]] && return 0
+    [[ "$SKIP_CONFIG" == true ]] && return 0
+
+    if check_server_initialized; then
+        log_info "Server 已授权 [幂等执行]"
+        return 0
     fi
-    
-    local lic_file="${FOUND_LICENSES[server]}"
-    local lic_name=$(basename "$lic_file")
-    local lic_dest="$GS_HOME/$lic_name"
-    
-    print_task_header "Server 授权"
-    print_subtask "授权文件: $lic_name"
-    
+
+    [[ -z "${FOUND_LICENSES[server]+_}" ]] && { log_warn "缺少Server授权文件"; return 1; }
+
+    print_task_header "Server 授权 [幂等执行]"
     local auth_tool="$GS_BASE/server/tools/authorizeSoftware"
-    if [[ ! -f "$auth_tool" ]]; then
-        print_subtask_error "未找到 authorizeSoftware 工具"
-        print_subtask_warn "请浏览器访问: https://$(get_host_ip):${SERVER_PORT}/geoscene/manager 手动授权"
-        return 1
-    fi
-    
-    print_subtask "执行授权命令..."
-    local rc=0
-    local output
-    output=$(runuser -u "$GS_USER" -- "$auth_tool" -f "$lic_dest" 2>&1) || rc=$?
-    echo "$output" | tee -a "$LOG_FILE"
-    
-    if [[ $rc -eq 0 ]]; then
-        print_subtask_success "Server 授权成功"
+    [[ ! -f "$auth_tool" ]] && { log_error "未找到授权工具"; return 1; }
+
+    local lic_dest="$GS_HOME/$(basename "${FOUND_LICENSES[server]}")"
+    if runuser -u "$GS_USER" -- "$auth_tool" -f "$lic_dest"; then
+        log_success "Server 授权成功 [幂等执行]"
         sleep 10
         return 0
     else
-        print_subtask_error "Server 授权失败 (exit $rc)"
-        print_subtask_warn "请浏览器访问: https://$(get_host_ip):${SERVER_PORT}/geoscene/manager 手动授权"
+        log_error "Server 授权失败"
         return 1
     fi
 }
 
 create_server_site() {
-    [[ "$DRY_RUN" == true ]] && { log_dry "跳过: 创建 Server 站点"; return 0; }
-    [[ "$SKIP_CONFIG" == true ]] && { log_info "跳过自动化配置"; return 0; }
-    
-    print_task_header "创建 Server 站点"
-    
+    [[ "$DRY_RUN" == true ]] && return 0
+    [[ "$SKIP_CONFIG" == true ]] && return 0
+
     if check_server_initialized; then
-        print_subtask_success "Server 站点已存在"
+        log_info "Server 站点已存在 [幂等执行]"
         return 0
     fi
-    
+
+    print_task_header "创建 Server 站点 [幂等执行]"
     local site_tool="$GS_BASE/server/tools/createsite/createsite.sh"
-    if [[ ! -f "$site_tool" ]]; then
-        print_subtask_error "未找到 createsite.sh 工具"
-        print_subtask_warn "请浏览器访问: https://$(get_host_ip):${SERVER_PORT}/geoscene/manager 手动创建站点"
-        return 1
-    fi
-    
+    [[ ! -f "$site_tool" ]] && { log_error "未找到站点创建工具"; return 1; }
+
     local directories="$GS_BASE/server/usr/directories"
     local config_store="$GS_BASE/server/usr/config-store"
     mkdir -p "$directories" "$config_store"
     chown -R "$GS_USER:$GS_GROUP" "$directories" "$config_store"
-    
-    print_subtask "执行站点创建命令..."
-    print_subtask "用户: $SITE_ADMIN_USER | 密码: $SITE_ADMIN_PASS"
-    
-    local rc=0
-    local output
-    output=$(runuser -u "$GS_USER" -- "$site_tool" \
-        -u "$SITE_ADMIN_USER" \
-        -p "$SITE_ADMIN_PASS" \
-        -d "$directories" \
-        -c "$config_store" 2>&1) || rc=$?
-    echo "$output" | tee -a "$LOG_FILE"
-    
-    if [[ $rc -eq 0 ]]; then
-        print_subtask_success "Server 站点创建成功"
-        
-        print_subtask "等待站点服务初始化..."
-        local site_wait_max=12 site_wait_count=0
-        while [[ $site_wait_count -lt $site_wait_max ]]; do
-            if check_server_initialized; then
-                print_subtask_success "Server 站点已就绪"
-                break
-            fi
-            site_wait_count=$((site_wait_count + 1))
-            [[ $site_wait_count -lt $site_wait_max ]] && {
-                log_info "等待站点初始化... ($site_wait_count/$site_wait_max)"
-                sleep 10
-            }
-        done
-        
+
+    if runuser -u "$GS_USER" -- "$site_tool" -u "$SITE_ADMIN_USER" -p "$SITE_ADMIN_PASS" \
+        -d "$directories" -c "$config_store"; then
+        log_success "Server 站点创建成功 [幂等执行]"
         sleep 30
         return 0
     else
-        print_subtask_error "Server 站点创建失败 (exit $rc)"
-        print_subtask_warn "请浏览器访问: https://$(get_host_ip):${SERVER_PORT}/geoscene/manager 手动创建站点"
+        log_error "Server 站点创建失败"
         return 1
     fi
 }
 
-start_portal() {
-    [[ "$DRY_RUN" == true ]] && { log_dry "跳过: 启动 Portal"; return 0; }
-    
-    local start_script="$GS_BASE/portal/startportal.sh"
-    if [[ ! -f "$start_script" ]]; then
-        print_subtask_warn "未找到 Portal 启动脚本"
-        return 1
-    fi
-    
-    if check_portal_running; then
-        print_subtask_success "Portal 已在运行"
+#==============================================================================
+# DataStore 操作
+#==============================================================================
+start_datastore() {
+    [[ "$DRY_RUN" == true ]] && return 0
+    local start_script="$GS_BASE/datastore/startdatastore.sh"
+    [[ ! -f "$start_script" ]] && return 1
+
+    if pgrep -f "geoscene.*datastore" &>/dev/null; then
+        log_info "DataStore 已在运行 [幂等执行]"
         return 0
     fi
-    
+
+    print_subtask "启动 GeoScene DataStore..."
+    runuser -u "$GS_USER" -- "$start_script" || true
+
+    local max_wait=120 elapsed=0
+    while [[ $elapsed -lt $max_wait ]]; do
+        if curl -sk "https://$(get_host_ip):${DATASTORE_PORT}/geoscene/datastore" &>/dev/null; then
+            log_success "DataStore 已就绪 [幂等执行]"
+            return 0
+        fi
+        sleep 5; elapsed=$((elapsed + 5))
+    done
+    log_warn "DataStore 启动超时"
+    return 1
+}
+
+configure_datastore() {
+    [[ "$DRY_RUN" == true ]] && return 0
+    [[ "$SKIP_CONFIG" == true ]] && return 0
+
+    print_task_header "配置 DataStore [幂等执行]"
+    local ds_tool="$GS_BASE/datastore/tools/configuredatastore.sh"
+    [[ ! -f "$ds_tool" ]] && { log_error "未找到DataStore配置工具"; return 1; }
+
+    local host_ip=$(get_host_ip)
+    local ds_data="$GS_BASE/datastore/usr/datastore"
+    mkdir -p "$ds_data"
+    chown -R "$GS_USER:$GS_GROUP" "$ds_data"
+
+    if runuser -u "$GS_USER" -- "$ds_tool" \
+        "https://${host_ip}:${SERVER_PORT}/geoscene/admin" \
+        "$SITE_ADMIN_USER" "$SITE_ADMIN_PASS" "$ds_data" \
+        --stores relational,spatiotemporal; then
+        log_success "DataStore 配置成功 [幂等执行]"
+        return 0
+    else
+        log_error "DataStore 配置失败"
+        return 1
+    fi
+}
+
+#==============================================================================
+# Portal 操作
+#==============================================================================
+start_portal() {
+    [[ "$DRY_RUN" == true ]] && return 0
+    local start_script="$GS_BASE/portal/startportal.sh"
+    [[ ! -f "$start_script" ]] && return 1
+
+    if pgrep -f "geoscene.*portal" &>/dev/null; then
+        log_info "Portal 已在运行 [幂等执行]"
+        return 0
+    fi
+
     print_subtask "启动 GeoScene Portal..."
-    runuser -u "$GS_USER" -- "$start_script" 2>&1 | tee -a "$LOG_FILE" || true
-    
+    runuser -u "$GS_USER" -- "$start_script" || true
+
     local max_wait=180 elapsed=0
     while [[ $elapsed -lt $max_wait ]]; do
-        if check_portal_running; then
-            print_subtask_success "Portal 已就绪"
+        if curl -sk "https://$(get_host_ip):${PORTAL_PORT}/geoscene/rest/info" &>/dev/null; then
+            log_success "Portal 已就绪 [幂等执行]"
             return 0
         fi
         sleep 10; elapsed=$((elapsed + 10))
-        log_info "等待 Portal 就绪... ($elapsed/$max_wait 秒)"
     done
-    print_subtask_warn "Portal 启动超时（进程可能仍在运行）"
+    log_warn "Portal 启动超时"
     return 1
 }
 
 check_portal_initialized() {
     local host_ip=$(get_host_ip)
-    local response
-    response=$(curl -sk "https://${host_ip}:${PORTAL_PORT}/geoscene/sharing/rest/portals/self?f=json" 2>/dev/null)
-    
-    if echo "$response" | grep -qi '"id"' && ! echo "$response" | grep -qi "not initialized"; then
-        return 0
-    fi
-    return 1
-}
-
-check_portal_running() {
-    if pgrep -f "geoscene.*portal" &>/dev/null || \
-       [[ -f "$GS_BASE/portal/usr/logs/portal.pid" ]] || \
-       curl -sk "https://$(get_host_ip):${PORTAL_PORT}/geoscene/rest/info" &>/dev/null; then
-        return 0
-    fi
-    return 1
+    local response=$(curl -sk "https://${host_ip}:${PORTAL_PORT}/geoscene/sharing/rest/portals/self?f=json" 2>/dev/null)
+    echo "$response" | grep -q '"id"' && ! echo "$response" | grep -qi "not initialized"
 }
 
 create_portal() {
-    [[ "$DRY_RUN" == true ]] && { log_dry "跳过: 创建 Portal 门户"; return 0; }
-    [[ "$SKIP_CONFIG" == true ]] && { log_info "跳过自动化配置"; return 0; }
-    
-    if [[ -z "${FOUND_LICENSES[portal]+_}" ]]; then
-        print_subtask_warn "缺少 Portal 授权文件，请浏览器手动创建门户"
-        return 1
+    [[ "$DRY_RUN" == true ]] && return 0
+    [[ "$SKIP_CONFIG" == true ]] && return 0
+
+    if check_portal_initialized; then
+        log_info "Portal 已初始化 [幂等执行]"
+        return 0
     fi
-    
-    print_task_header "创建 Portal 门户"
-    
+
+    [[ -z "${FOUND_LICENSES[portal]+_}" ]] && { log_warn "缺少Portal授权文件"; return 1; }
+
+    print_task_header "创建 Portal 门户 [幂等执行]"
     local portal_tool="$GS_BASE/portal/tools/createportal/createportal.sh"
-    if [[ ! -f "$portal_tool" ]]; then
-        print_subtask_error "未找到 createportal.sh 工具"
-        print_subtask_warn "请浏览器访问: https://$(get_host_ip):${PORTAL_PORT}/geoscene/home 手动创建门户"
-        return 1
-    fi
-    
-    local lic_file="${FOUND_LICENSES[portal]}"
-    local lic_name=$(basename "$lic_file")
-    local lic_dest="$GS_HOME/$lic_name"
-    
-    print_subtask "授权文件: $lic_name"
-    
+    [[ ! -f "$portal_tool" ]] && { log_error "未找到Portal创建工具"; return 1; }
+
     local portal_content="$GS_BASE/portal/usr/portal-content"
     mkdir -p "$portal_content"
     chown -R "$GS_USER:$GS_GROUP" "$portal_content"
-    chmod 755 "$portal_content"
-    
-    print_subtask "执行门户创建命令..."
-    print_subtask "用户: $PORTAL_ADMIN_USER | 密码: $PORTAL_ADMIN_PASS | 邮箱: $PORTAL_ADMIN_EMAIL"
-    
-    local max_retries=3 retry_count=0 retry_interval=30 rc=0 output
-    
-    while [[ $retry_count -lt $max_retries ]]; do
-        rc=0
-        output=$(runuser -u "$GS_USER" -- "$portal_tool" \
-            -fn "$PORTAL_ADMIN_FN" \
-            -ln "$PORTAL_ADMIN_LN" \
-            -u "$PORTAL_ADMIN_USER" \
-            -p "$PORTAL_ADMIN_PASS" \
-            -e "$PORTAL_ADMIN_EMAIL" \
-            -qi "$PORTAL_ADMIN_QI" \
-            -qa "$PORTAL_ADMIN_QA" \
-            -d "$portal_content" \
-            -lf "$lic_dest" 2>&1) || rc=$?
-        echo "$output" | tee -a "$LOG_FILE"
-        
-        if [[ $rc -eq 0 ]] && ! echo "$output" | grep -qiE "failed|error|index service configuration failed"; then
-            print_subtask_success "Portal 门户创建成功（授权已导入）"
-            sleep 30
-            return 0
-        fi
-        
-        retry_count=$((retry_count + 1))
-        if [[ $retry_count -lt $max_retries ]]; then
-            print_subtask_warn "Portal 创建失败或出现错误，等待 ${retry_interval}s 后重试 ($retry_count/$max_retries)"
-            sleep $retry_interval
-            
-            print_subtask "重启 Portal 服务..."
-            runuser -u "$GS_USER" -- "$GS_BASE/portal/stopportal.sh" 2>/dev/null || true
-            sleep 10
-            runuser -u "$GS_USER" -- "$GS_BASE/portal/startportal.sh" 2>&1 | tee -a "$LOG_FILE" || true
-            sleep 60
-            
-            print_subtask "重新尝试创建门户..."
-        fi
-    done
-    
-    if echo "$output" | grep -qi "index service configuration failed"; then
-        print_subtask_error "Portal Index Service 配置失败"
-        print_subtask_warn "Portal 可能已部分创建，请浏览器访问检查: https://$(get_host_ip):${PORTAL_PORT}/geoscene/home"
+
+    local lic_dest="$GS_HOME/$(basename "${FOUND_LICENSES[portal]}")"
+
+    if runuser -u "$GS_USER" -- "$portal_tool" \
+        -fn "$PORTAL_ADMIN_FN" -ln "$PORTAL_ADMIN_LN" \
+        -u "$PORTAL_ADMIN_USER" -p "$PORTAL_ADMIN_PASS" \
+        -e "$PORTAL_ADMIN_EMAIL" -qi "$PORTAL_ADMIN_QI" -qa "$PORTAL_ADMIN_QA" \
+        -d "$portal_content" -lf "$lic_dest"; then
+        log_success "Portal 门户创建成功 [幂等执行]"
+        sleep 30
+        return 0
     else
-        print_subtask_error "Portal 门户创建失败 (exit $rc)"
-        print_subtask_warn "请浏览器访问: https://$(get_host_ip):${PORTAL_PORT}/geoscene/home 手动创建门户"
+        log_error "Portal 门户创建失败"
+        return 1
     fi
-    return 1
 }
 
 update_portal_webcontext() {
-    [[ "$DRY_RUN" == true ]] && { log_dry "跳过: 更新 Portal WebContextURL"; return 0; }
-    [[ "$SKIP_CONFIG" == true ]] && { log_info "跳过自动化配置"; return 0; }
-    
-    print_task_header "更新 Portal WebContextURL"
-    
+    [[ "$DRY_RUN" == true ]] && return 0
+    [[ "$SKIP_CONFIG" == true ]] && return 0
+
+    print_task_header "更新 Portal WebContextURL [幂等执行]"
     local host_ip=$(get_host_ip)
-    local portal_token=""
-    
-    print_subtask "等待 Portal 完全就绪..."
-    sleep 30
-    
-    print_subtask "获取 Portal Token..."
-    local max_token_retries=12 token_retry_interval=10 token_retry_count=0
-    
-    while [[ $token_retry_count -lt $max_token_retries ]]; do
-        portal_token=$(curl -sk -X POST "https://${host_ip}:${PORTAL_PORT}/geoscene/sharing/rest/generateToken" \
-            -d "username=$PORTAL_ADMIN_USER" \
-            -d "password=$PORTAL_ADMIN_PASS" \
-            -d "client=requestip" \
-            -d "f=json" 2>/dev/null | grep -oP '"token":"[^"]+' | cut -d'"' -f4)
-        
-        if [[ -n "$portal_token" ]]; then
-            break
-        fi
-        
-        token_retry_count=$((token_retry_count + 1))
-        [[ $token_retry_count -lt $max_token_retries ]] && {
-            log_info "等待 Portal Token... ($token_retry_count/$max_token_retries)"
-            sleep $token_retry_interval
-        }
-    done
-    
-    if [[ -z "$portal_token" ]]; then
-        print_subtask_warn "无法获取 Portal Token，跳过 WebContextURL 更新"
-        print_subtask_warn "请手动在 Portal Admin 中更新 Web Context URL"
-        return 1
-    fi
-    print_subtask_success "Token 获取成功"
-    
+
+    local portal_token=$(curl -sk -X POST "https://${host_ip}:${PORTAL_PORT}/geoscene/sharing/rest/generateToken" \
+        -d "username=$PORTAL_ADMIN_USER" -d "password=$PORTAL_ADMIN_PASS" \
+        -d "client=requestip" -d "f=json" 2>/dev/null | grep -oP '"token":"[^"]+' | cut -d'"' -f4)
+    [[ -z "$portal_token" ]] && { log_warn "无法获取Portal Token"; return 1; }
+
     local web_context_url="https://${host_ip}:${PORTAL_PORT}/geoscene"
-    print_subtask "设置 WebContextURL: $web_context_url"
-    
-    local rc=0
-    local output
-    output=$(curl -sk -X POST "https://${host_ip}:${PORTAL_PORT}/geoscene/portaladmin/system/updateWebContextURL" \
-        -d "webContextURL=$web_context_url" \
-        -d "token=$portal_token" \
-        -d "f=json" 2>&1) || rc=$?
-    echo "$output" | tee -a "$LOG_FILE"
-    
-    if [[ $rc -eq 0 ]]; then
-        print_subtask_success "Portal WebContextURL 已更新: $web_context_url"
-        
-        print_subtask "重启 Portal..."
+
+    if curl -sk -X POST "https://${host_ip}:${PORTAL_PORT}/geoscene/portaladmin/system/updateWebContextURL" \
+        -d "webContextURL=$web_context_url" -d "token=$portal_token" -d "f=json" &>/dev/null; then
+        log_success "WebContextURL 已更新 [幂等执行]"
         runuser -u "$GS_USER" -- "$GS_BASE/portal/stopportal.sh" 2>/dev/null || true
         sleep 10
-        runuser -u "$GS_USER" -- "$GS_BASE/portal/startportal.sh" 2>&1 | tee -a "$LOG_FILE" || true
+        runuser -u "$GS_USER" -- "$GS_BASE/portal/startportal.sh" || true
         sleep 30
-        
-        print_subtask_success "Portal 已重启，WebContextURL 配置生效"
         return 0
     else
-        print_subtask_error "Portal WebContextURL 更新失败"
-        print_subtask_warn "请手动在 Portal Admin 中更新 Web Context URL"
+        log_warn "WebContextURL 更新失败"
         return 1
     fi
 }
 
-start_datastore() {
-    [[ "$DRY_RUN" == true ]] && { log_dry "跳过: 启动 DataStore"; return 0; }
-    
-    local start_script="$GS_BASE/datastore/startdatastore.sh"
-    if [[ ! -f "$start_script" ]]; then
-        print_subtask_warn "未找到 DataStore 启动脚本"
+#==============================================================================
+# WebAdaptor 配置（必需）
+#==============================================================================
+configure_webadaptor() {
+    [[ "$DRY_RUN" == true ]] && return 0
+    [[ "$INSTALL_WEBADAPTOR" == false ]] && { log_info "跳过WebAdaptor配置"; return 0; }
+
+    print_task_header "配置 GeoScene WebAdaptor [幂等执行]"
+
+    if [[ ! -d "$TOMCAT_HOME" ]]; then
+        log_error "Tomcat目录不存在: $TOMCAT_HOME"
         return 1
     fi
-    
-    if check_datastore_running; then
-        print_subtask_success "DataStore 已在运行"
-        return 0
+
+    local webadaptor_dir="$GS_BASE/webadaptor"
+    [[ ! -d "$webadaptor_dir" ]] && webadaptor_dir="$GS_BASE"
+
+    local war_file=$(find "$webadaptor_dir" -name "geoscene.war" 2>/dev/null | head -1)
+    [[ -z "$war_file" ]] && { log_error "未找到 geoscene.war"; return 1; }
+
+    # 部署war（幂等）
+    if [[ -f "$TOMCAT_HOME/webapps/geoscene.war" ]]; then
+        log_info "WebAdaptor war已部署 [幂等执行]"
+    else
+        print_subtask "部署 geoscene.war..."
+        cp "$war_file" "$TOMCAT_HOME/webapps/"
+        cp "$war_file" "$TOMCAT_HOME/webapps/server.war"
+        chown "$GS_USER:$GS_GROUP" "$TOMCAT_HOME/webapps/"*.war
+        log_success "WebAdaptor 部署完成 [幂等执行]"
     fi
-    
-    print_subtask "启动 GeoScene DataStore..."
-    runuser -u "$GS_USER" -- "$start_script" 2>&1 | tee -a "$LOG_FILE" || true
-    
-    local max_wait=120 elapsed=0
-    while [[ $elapsed -lt $max_wait ]]; do
-        if check_datastore_running; then
-            print_subtask_success "DataStore 已就绪"
-            return 0
-        fi
-        sleep 5; elapsed=$((elapsed + 5))
-        log_info "等待 DataStore 就绪... ($elapsed/$max_wait 秒)"
-    done
-    print_subtask_warn "DataStore 启动超时（进程可能仍在运行）"
-    return 1
+
+    # 配置server.xml HTTPS
+    local pfx_file="$WEBADAPTOR_SSL_DIR/${WEBADAPTOR_CERT_PREFIX}.pfx"
+    if [[ -f "$pfx_file" ]]; then
+        cp "$pfx_file" "$TOMCAT_HOME/bin/"
+        chown "$GS_USER:$GS_GROUP" "$TOMCAT_HOME/bin/"*.pfx 2>/dev/null || true
+    fi
+
+    log_success "WebAdaptor 配置完成 [幂等执行]"
 }
 
-check_datastore_running() {
-    if pgrep -f "geoscene.*datastore" &>/dev/null || \
-       [[ -f "$GS_BASE/datastore/usr/logs/datastore.pid" ]] || \
-       curl -sk "https://$(get_host_ip):${DATASTORE_PORT}/geoscene/datastore" &>/dev/null; then
-        return 0
-    fi
-    return 1
-}
+#==============================================================================
+# 联合托管配置
+#==============================================================================
+configure_federation() {
+    [[ "$DRY_RUN" == true ]] && return 0
+    [[ "$CONFIGURE_FEDERATION" == false ]] && { log_info "跳过联合托管配置"; return 0; }
 
-ensure_publishing_tools() {
-    [[ "$DRY_RUN" == true ]] && { log_dry "跳过: 确保 PublishingTools 启动"; return 0; }
-    [[ "$SKIP_CONFIG" == true ]] && { log_info "跳过自动化配置"; return 0; }
-    
-    print_subtask "检查并启动 PublishingTools 服务..."
-    
+    if [[ ! -d "$GS_BASE/server" || ! -d "$GS_BASE/portal" ]]; then
+        log_warn "Server或Portal未安装，跳过联合托管"
+        return 1
+    fi
+
+    print_task_header "配置 Portal-Server 联合托管 [幂等执行]"
     local host_ip=$(get_host_ip)
-    local token=""
-    local max_retries=12 retry_interval=10 retry_count=0
-    
-    while [[ $retry_count -lt $max_retries ]]; do
-        token=$(curl -sk -X POST "https://${host_ip}:${SERVER_PORT}/geoscene/admin/generateToken" \
-            -d "username=$SITE_ADMIN_USER" \
-            -d "password=$SITE_ADMIN_PASS" \
-            -d "client=requestip" \
-            -d "f=json" 2>/dev/null | grep -oP '"token":"[^"]+' | cut -d'"' -f4)
-        
-        if [[ -n "$token" ]]; then
-            break
+
+    local portal_token=$(curl -sk -X POST "https://${host_ip}:${PORTAL_PORT}/geoscene/sharing/rest/generateToken" \
+        -d "username=$PORTAL_ADMIN_USER" -d "password=$PORTAL_ADMIN_PASS" \
+        -d "client=requestip" -d "f=json" 2>/dev/null | grep -oP '"token":"[^"]+' | cut -d'"' -f4)
+    [[ -z "$portal_token" ]] && { log_warn "无法获取Portal Token"; return 1; }
+
+    local server_url="https://${host_ip}:${SERVER_PORT}"
+    local server_admin_url="https://${host_ip}:${SERVER_PORT}/geoscene/admin"
+
+    print_subtask "添加Server到Portal..."
+    local add_response=$(curl -sk -X POST "https://${host_ip}:${PORTAL_PORT}/geoscene/portaladmin/federation/servers/add" \
+        -d "url=$server_url" -d "adminUrl=$server_admin_url" \
+        -d "username=$SITE_ADMIN_USER" -d "password=$SITE_ADMIN_PASS" \
+        -d "isAdmin=True" -d "token=$portal_token" -d "f=json" 2>/dev/null)
+
+    if echo "$add_response" | grep -qi "success"; then
+        log_success "Server 已添加到Portal [幂等执行]"
+
+        local server_id=$(echo "$add_response" | grep -oP '"serverId":"[^"]+' | cut -d'"' -f4)
+        if [[ -n "$server_id" ]]; then
+            curl -sk -X POST "https://${host_ip}:${PORTAL_PORT}/geoscene/portaladmin/federation/servers/update" \
+                -d "serverId=$server_id" -d "isHosted=True" \
+                -d "token=$portal_token" -d "f=json" &>/dev/null
+            log_success "联合托管配置完成 [幂等执行]"
         fi
-        
-        retry_count=$((retry_count + 1))
-        [[ $retry_count -lt $max_retries ]] && {
-            log_info "等待 Server Token... ($retry_count/$max_retries)"
-            sleep $retry_interval
-        }
-    done
-    
-    if [[ -z "$token" ]]; then
-        print_subtask_warn "无法获取 Server Token，跳过 PublishingTools 检查"
-        return 1
+    else
+        log_warn "联合托管配置可能需要手动完成"
     fi
-    
-    local status_url="https://${host_ip}:${SERVER_PORT}/geoscene/admin/services/System/PublishingTools.GPServer/status"
-    local start_url="https://${host_ip}:${SERVER_PORT}/geoscene/admin/services/System/PublishingTools.GPServer/start"
-    
-    retry_count=0
-    while [[ $retry_count -lt $max_retries ]]; do
-        local status
-        status=$(curl -sk "${status_url}?f=json&token=$token" 2>/dev/null)
-        
-        if echo "$status" | grep -qi '"configuredState"[[:space:]]*:[[:space:]]*"started"'; then
-            print_subtask_success "PublishingTools 已运行"
-            return 0
-        fi
-        
-        if echo "$status" | grep -qi "stopped"; then
-            print_subtask "启动 PublishingTools 服务..."
-            curl -sk -X POST "${start_url}?f=json&token=$token" &>/dev/null
-        fi
-        
-        retry_count=$((retry_count + 1))
-        [[ $retry_count -lt $max_retries ]] && {
-            log_info "等待 PublishingTools 就绪... ($retry_count/$max_retries)"
-            sleep $retry_interval
-        }
-    done
-    
-    print_subtask_warn "PublishingTools 未能在规定时间内就绪"
-    return 1
 }
 
-configure_datastore() {
-    [[ "$DRY_RUN" == true ]] && { log_dry "跳过: 配置 DataStore"; return 0; }
-    [[ "$SKIP_CONFIG" == true ]] && { log_info "跳过自动化配置"; return 0; }
-    
-    print_task_header "配置 DataStore"
-    
-    local ds_tool="$GS_BASE/datastore/tools/configuredatastore.sh"
-    if [[ ! -f "$ds_tool" ]]; then
-        print_subtask_error "未找到 configuredatastore.sh 工具"
-        print_subtask_warn "请浏览器访问: https://${host_ip}:${DATASTORE_PORT}/geoscene/datastore 手动配置"
-        return 1
-    fi
-    
-    local host_ip=$(get_host_ip)
-    
-    if ! check_server_initialized; then
-        print_subtask_error "Server 站点未初始化或 Token 获取失败"
-        print_subtask_warn "请先确认 Server 站点创建成功"
-        return 1
-    fi
-    
-    print_subtask "确保 PublishingTools 已启动..."
-    if ! ensure_publishing_tools; then
-        print_subtask_warn "PublishingTools 未就绪，可能影响 DataStore 配置"
-    fi
-    
-    local ds_data="$GS_BASE/datastore/usr/datastore"
-    mkdir -p "$ds_data"
-    chown -R "$GS_USER:$GS_GROUP" "$ds_data"
-    
-    print_subtask "等待 DataStore 配置服务就绪..."
-    local ds_ready_max=12 ds_ready_count=0
-    while [[ $ds_ready_count -lt $ds_ready_max ]]; do
-        if check_datastore_ready; then
-            break
-        fi
-        ds_ready_count=$((ds_ready_count + 1))
-        [[ $ds_ready_count -lt $ds_ready_max ]] && {
-            log_info "等待 DataStore 配置接口... ($ds_ready_count/$ds_ready_max)"
-            sleep 10
-        }
-    done
-    
-    print_subtask "执行 DataStore 配置命令..."
-    print_subtask "连接 Server: https://${host_ip}:${SERVER_PORT}/geoscene/admin"
-    print_subtask "用户: $SITE_ADMIN_USER | 密码: $SITE_ADMIN_PASS"
-    print_subtask "存储类型: relational, spatiotemporal"
-    
-    local max_retries=3 retry_count=0 retry_interval=30 rc=0 output
-    
-    while [[ $retry_count -lt $max_retries ]]; do
-        rc=0
-        output=$(runuser -u "$GS_USER" -- "$ds_tool" \
-            "https://${host_ip}:${SERVER_PORT}/geoscene/admin" \
-            "$SITE_ADMIN_USER" \
-            "$SITE_ADMIN_PASS" \
-            "$ds_data" \
-            --stores relational,spatiotemporal 2>&1) || rc=$?
-        echo "$output" | tee -a "$LOG_FILE"
-        
-        if [[ $rc -eq 0 ]]; then
-            print_subtask_success "DataStore 配置成功"
-            return 0
-        fi
-        
-        if echo "$output" | grep -qiE "unable to configure|attempt to configure data store failed"; then
-            print_subtask_warn "检测到配置失败错误信息"
-        fi
-        
-        retry_count=$((retry_count + 1))
-        if [[ $retry_count -lt $max_retries ]]; then
-            print_subtask_warn "DataStore 配置失败，等待 ${retry_interval}s 后重试 ($retry_count/$max_retries)"
-            sleep $retry_interval
-            print_subtask "重新尝试配置..."
-            ensure_publishing_tools || true
-            sleep 20
-        fi
-    done
-    
-    print_subtask_error "DataStore 配置失败 (exit $rc)"
-    print_subtask_warn "请浏览器访问: https://${host_ip}:${DATASTORE_PORT}/geoscene/datastore 手动配置"
-    return 1
-}
-
+#==============================================================================
+# 安装总结
+#==============================================================================
 print_summary() {
-    local host_ip; host_ip=$(get_host_ip)
-    local installed_comps=()
-    for comp in server portal datastore; do
-        is_installed "$comp" && installed_comps+=("$comp")
-    done
-    
-    local server_lic=""
-    local portal_lic=""
-    [[ -n "${FOUND_LICENSES[server]+_}" ]] && server_lic=$(basename "${FOUND_LICENSES[server]}")
-    [[ -n "${FOUND_LICENSES[portal]+_}" ]] && portal_lic=$(basename "${FOUND_LICENSES[portal]}")
-
-    local config_status=""
-    if [[ "$SKIP_CONFIG" == true ]]; then
-        config_status="已跳过自动化配置"
-    else
-        config_status="已执行自动化配置"
-    fi
+    local host_ip=$(get_host_ip)
+    local fqdn_display="${FQDN:-$host_ip}"
 
     echo ""
     echo -e "\033[32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo -e "  GeoScene Enterprise 安装完成"
+    echo -e "  GeoScene Enterprise v${SCRIPT_VERSION} 安装完成"
     echo -e "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
     echo ""
-    echo "  安装用户:    $GS_USER"
-    echo "  安装目录:    $GS_BASE"
-    echo "  主机 IP:     $host_ip"
-    echo "  日志文件:    $LOG_FILE"
-    echo "  配置状态:    $config_status"
+    echo "  安装用户: $GS_USER"
+    echo "  安装目录: $GS_BASE"
+    echo "  主机 IP:  $host_ip"
+    echo "  FQDN:     $fqdn_display"
+    echo "  日志文件: $LOG_FILE"
     echo ""
-    echo "  已安装组件:"
-    for comp in "${installed_comps[@]}"; do
-        echo "    ✅ $comp  →  $(gs_install_dir "$comp")"
-    done
+    echo "  访问地址:"
+    echo "    Server Manager: https://${host_ip}:${SERVER_PORT}/geoscene/manager"
+    echo "    Portal:         https://${host_ip}:${PORTAL_PORT}/geoscene/home"
+    echo "    DataStore:      https://${host_ip}:${DATASTORE_PORT}/geoscene/datastore"
+    [[ "$INSTALL_WEBADAPTOR" == true ]] && echo "    WebAdaptor:     https://${fqdn_display}:${WEBADAPTOR_PORT}/${WEBADAPTOR_CONTEXT}"
     echo ""
-    
-    echo "  访问地址 (使用实际 IP):"
-    is_installed server    && echo "    Server Manager:  https://${host_ip}:${SERVER_PORT}/geoscene/manager"
-    is_installed server    && echo "    Server REST:     https://${host_ip}:${SERVER_PORT}/geoscene/rest/services"
-    is_installed portal    && echo "    Portal:          https://${host_ip}:${PORTAL_PORT}/geoscene/home"
-    is_installed portal    && echo "    Portal Admin:    https://${host_ip}:${PORTAL_PORT}/geoscene/portaladmin"
-    is_installed datastore && echo "    DataStore:       https://${host_ip}:${DATASTORE_PORT}/geoscene/datastore"
-    echo ""
-    
-    if [[ "$SKIP_CONFIG" == true ]]; then
-        echo -e "\033[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-        echo -e "\033[36m  手动配置步骤 (请按顺序执行):\033[0m"
-        echo -e "\033[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-        echo ""
-        
-        if is_installed server; then
-            echo -e "\033[33m  步骤 1: Server 授权\033[0m"
-            if [[ -n "$server_lic" ]]; then
-                echo "    命令行: runuser -u $GS_USER -- $GS_BASE/server/tools/authorizeSoftware -f $GS_HOME/$server_lic"
-            else
-                echo "    浏览器: https://${host_ip}:${SERVER_PORT}/geoscene/manager"
-            fi
-            echo ""
-            
-            echo -e "\033[33m  步骤 2: 创建 Server 站点\033[0m"
-            echo "    命令行: runuser -u $GS_USER -- $GS_BASE/server/tools/createsite/createsite.sh"
-            echo "    浏览器: https://${host_ip}:${SERVER_PORT}/geoscene/manager"
-            echo ""
-        fi
-        
-        if is_installed portal; then
-            echo -e "\033[33m  步骤 3: 创建 Portal 门户\033[0m"
-            if [[ -n "$portal_lic" ]]; then
-                echo "    命令行: runuser -u $GS_USER -- $GS_BASE/portal/tools/createportal/createportal.sh -fn Admin -ln User -u portaladmin -p YourPassword123 -e admin@example.com -qi 1 -qa Beijing -d $GS_BASE/portal/usr/portal-content -lf $GS_HOME/$portal_lic"
-            fi
-            echo "    浏览器: https://${host_ip}:${PORTAL_PORT}/geoscene/home"
-            echo ""
-        fi
-        
-        if is_installed datastore; then
-            echo -e "\033[33m  步骤 4: 配置 DataStore\033[0m"
-            echo "    命令行: runuser -u $GS_USER -- $GS_BASE/datastore/tools/configuredatastore.sh https://${host_ip}:${SERVER_PORT}/geoscene/admin siteadmin YourPassword123 $GS_BASE/datastore/usr/datastore --stores relational,spatiotemporal"
-            echo "    浏览器: https://${host_ip}:${DATASTORE_PORT}/geoscene/datastore"
-            echo ""
-        fi
-    else
-        echo -e "\033[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-        echo -e "\033[36m  管理员账户信息:\033[0m"
-        echo -e "\033[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-        echo ""
-        echo "  Server 管理员:"
-        echo "    用户名: $SITE_ADMIN_USER"
-        echo "    密码:   $SITE_ADMIN_PASS"
-        echo ""
-        echo "  Portal 管理员:"
-        echo "    用户名: $PORTAL_ADMIN_USER"
-        echo "    密码:   $PORTAL_ADMIN_PASS"
-        echo "    邮箱:   $PORTAL_ADMIN_EMAIL"
-        echo ""
-        
-        echo -e "\033[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-        echo -e "\033[36m  如果自动化配置失败，请浏览器手动处理:\033[0m"
-        echo -e "\033[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-        echo ""
-        echo "  Server 授权/站点: https://${host_ip}:${SERVER_PORT}/geoscene/manager"
-        echo "  Portal 门户:      https://${host_ip}:${PORTAL_PORT}/geoscene/home"
-        echo "  DataStore 配置:   https://${host_ip}:${DATASTORE_PORT}/geoscene/datastore"
-        echo ""
-    fi
-    
-    echo -e "\033[32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-    echo ""
-    echo -e "\033[32m  提示:\033[0m"
-    echo "    • 各组件状态检查:"
-    is_installed server    && echo "      Server:   runuser -u $GS_USER -- $GS_BASE/server/tools/checkserverstatus"
-    is_installed portal    && echo "      Portal:   runuser -u $GS_USER -- $GS_BASE/portal/tools/checkportalstatus"
-    is_installed datastore && echo "      DataStore: runuser -u $GS_USER -- $GS_BASE/datastore/tools/checkdatastorestatus"
-    echo ""
-    echo "    • 查看完整日志: cat $LOG_FILE"
+    echo "  管理员账户:"
+    echo "    Server: $SITE_ADMIN_USER / $SITE_ADMIN_PASS"
+    echo "    Portal: $PORTAL_ADMIN_USER / $PORTAL_ADMIN_PASS"
     echo ""
     echo -e "\033[32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
-    echo ""
-
-    {
-        echo "======= GeoScene 安装总结 ======="
-        echo "安装时间: $(date '+%Y-%m-%d %H:%M:%S')"
-        echo "安装用户: $GS_USER"
-        echo "安装目录: $GS_BASE"
-        echo "主机 IP:  $host_ip"
-        echo "日志:     $LOG_FILE"
-        echo "组件:     ${installed_comps[*]:-无}"
-        echo "配置状态: $config_status"
-        [[ -n "$server_lic" ]] && echo "Server授权文件: $GS_HOME/$server_lic"
-        [[ -n "$portal_lic" ]] && echo "Portal授权文件: $GS_HOME/$portal_lic"
-        is_installed server    && echo "URL[Server Manager]: https://${host_ip}:${SERVER_PORT}/geoscene/manager"
-        is_installed portal    && echo "URL[Portal]:         https://${host_ip}:${PORTAL_PORT}/geoscene/home"
-        is_installed datastore && echo "URL[DataStore]:      https://${host_ip}:${DATASTORE_PORT}/geoscene/datastore"
-        echo "管理员账户:"
-        echo "  Server: $SITE_ADMIN_USER / $SITE_ADMIN_PASS"
-        echo "  Portal: $PORTAL_ADMIN_USER / $PORTAL_ADMIN_PASS"
-        echo "================================="
-    } >> "$LOG_FILE"
 }
 
+#==============================================================================
+# 主执行流程
+#==============================================================================
 main() {
     mkdir -p "$(dirname "$LOG_FILE")"; touch "$LOG_FILE"
 
     echo -e "\033[34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
     echo -e "\033[34m  🚀 GeoScene Universal Installer v${SCRIPT_VERSION}\033[0m"
-    [[ "$DRY_RUN" == true ]] && \
-        echo -e "\033[33m  ⚠️  DRY-RUN 模式，不执行任何实际变更\033[0m"
-    [[ "$SKIP_CONFIG" == true ]] && \
-        echo -e "\033[33m  ⚠️  跳过自动化配置模式\033[0m"
+    [[ "$DRY_RUN" == true ]] && echo -e "\033[33m  ⚠️  DRY-RUN 模式\033[0m"
+    [[ "$SKIP_CONFIG" == true ]] && echo -e "\033[33m  ⚠️  跳过自动化配置\033[0m"
     echo -e "\033[34m  📋 日志: $LOG_FILE\033[0m"
     echo -e "\033[34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
 
     check_prerequisites
     scan_workspace
     setup_system
+    configure_hostname_and_hosts
 
-    for comp in server portal datastore; do
-        [[ -n "${FOUND_INSTALLERS[$comp]+_}" ]] && \
-            install_component "$comp" "${FOUND_INSTALLERS[$comp]}"
+    # 下载依赖
+    if [[ "$AUTO_DOWNLOAD" == true ]]; then
+        download_and_install_jdk
+        download_and_install_tomcat
+    fi
+
+    create_self_signed_certificate
+
+    # 安装组件（全部必需）
+    for comp in server datastore portal webadaptor; do
+        [[ -n "${FOUND_INSTALLERS[$comp]+_}" ]] && install_component "$comp" "${FOUND_INSTALLERS[$comp]}"
     done
 
     copy_license_files
 
     if [[ "$SKIP_CONFIG" == false ]]; then
         log_host_ip
-        
-        print_task_header "自动化配置阶段"
-        
-        print_subtask "Server 启动与配置"
-        start_server || true
-        if check_server_running; then
-            authorize_server || true
-            create_server_site || true
-            
-            if check_server_running; then
-                print_subtask "等待 Server 服务完全就绪..."
-                sleep 60
-                ensure_publishing_tools || true
-            fi
-        else
-            print_subtask_warn "Server 未运行，跳过授权和站点创建"
-        fi
-        
-        print_subtask "DataStore 启动与配置"
-        start_datastore || true
-        if check_datastore_running; then
-            if check_server_running; then
-                print_subtask "等待 DataStore 完全就绪..."
-                sleep 30
-                configure_datastore || true
-            else
-                print_subtask_warn "Server 未运行，跳过 DataStore 配置"
-            fi
-        else
-            print_subtask_warn "DataStore 未运行，跳过配置"
-        fi
-        
-        print_subtask "Portal 启动与配置"
-        start_portal || true
-        if check_portal_running; then
-            print_subtask "等待 Portal 完全就绪..."
-            sleep 30
-            create_portal || true
-            if check_portal_initialized; then
-                update_portal_webcontext || true
-            else
-                print_subtask_warn "Portal 未正确初始化，跳过 WebContextURL 更新"
-            fi
-        else
-            print_subtask_warn "Portal 未运行，跳过门户创建"
-        fi
-    else
-        log_host_ip
-        start_server || true
+        print_task_header "自动化配置阶段 [幂等执行]"
+
+        # Server
+        start_server && authorize_server && create_server_site
+
+        # DataStore
+        start_datastore && configure_datastore
+
+        # Portal
+        start_portal && create_portal && update_portal_webcontext
+
+        # WebAdaptor & Federation
+        configure_webadaptor
+        configure_federation
     fi
 
-    if [[ "$DRY_RUN" == true ]]; then
-        log_dry "预演结束，去掉 --dry-run 后重新运行"
-    else
-        print_summary
-    fi
+    [[ "$DRY_RUN" == true ]] && log_dry "预演结束" || print_summary
 }
 
-main "$@"
+#==============================================================================
+# 安装后健康检查
+#==============================================================================
+perform_health_check() {
+    [[ "$DRY_RUN" == true ]] && return 0
+
+    print_task_header "安装后健康检查"
+    local all_passed=true
+    local host_ip=$(get_host_ip)
+
+    # 1. Server健康检查
+    print_subtask "检查 Server 状态..."
+    if curl -sk "https://${host_ip}:${SERVER_PORT}/geoscene/rest/info" &>/dev/null; then
+        print_subtask_success "Server API 正常"
+        local token=$(curl -sk -X POST "https://${host_ip}:${SERVER_PORT}/geoscene/admin/generateToken" \
+            -d "username=$SITE_ADMIN_USER" -d "password=$SITE_ADMIN_PASS" \
+            -d "client=requestip" -d "f=json" 2>/dev/null | grep -oP '"token":"[^"]+' | cut -d'"' -f4)
+        [[ -n "$token" ]] && print_subtask_success "Server 授权正常" || print_subtask_warn "Server 授权可能有问题"
+    else
+        print_subtask_error "Server API 无法访问"
+        all_passed=false
+    fi
+
+    # 2. Portal健康检查
+    print_subtask "检查 Portal 状态..."
+    if curl -sk "https://${host_ip}:${PORTAL_PORT}/geoscene/rest/info" &>/dev/null; then
+        print_subtask_success "Portal API 正常"
+    else
+        print_subtask_error "Portal API 无法访问"
+        all_passed=false
+    fi
+
+    # 3. DataStore健康检查
+    print_subtask "检查 DataStore 状态..."
+    if curl -sk "https://${host_ip}:${DATASTORE_PORT}/geoscene/datastore" &>/dev/null; then
+        print_subtask_success "DataStore API 正常"
+    else
+        print_subtask_warn "DataStore API 无法访问"
+    fi
+
+    # 4. 系统资源检查
+    print_subtask "检查系统资源..."
+    local ram_mb=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
+    local disk_avail=$(df -h "$GS_HOME" 2>/dev/null | awk 'NR==2{print $4}')
+    print_subtask_success "内存: ${ram_mb}MB, 磁盘: $disk_avail"
+
+    [[ "$all_passed" == true ]] && log_success "所有健康检查通过" || log_warn "部分检查未通过"
+}
+
+#==============================================================================
+# systemd服务管理
+#==============================================================================
+setup_systemd_services() {
+    [[ "$DRY_RUN" == true ]] && return 0
+
+    print_task_header "配置 systemd 服务"
+
+    cat > /etc/systemd/system/geoscene-server.service << EOF
+[Unit]
+Description=GeoScene Enterprise Server
+After=network.target
+[Service]
+Type=forking
+User=$GS_USER
+Group=$GS_GROUP
+ExecStart=$GS_BASE/server/startserver.sh
+ExecStop=$GS_BASE/server/stopserver.sh
+PIDFile=$GS_BASE/server/usr/logs/server.pid
+Restart=on-failure
+RestartSec=30
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    cat > /etc/systemd/system/geoscene-portal.service << EOF
+[Unit]
+Description=GeoScene Enterprise Portal
+After=network.target geoscene-server.service
+[Service]
+Type=forking
+User=$GS_USER
+Group=$GS_GROUP
+ExecStart=$GS_BASE/portal/startportal.sh
+ExecStop=$GS_BASE/portal/stopportal.sh
+PIDFile=$GS_BASE/portal/usr/logs/portal.pid
+Restart=on-failure
+RestartSec=30
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    cat > /etc/systemd/system/geoscene-datastore.service << EOF
+[Unit]
+Description=GeoScene Enterprise DataStore
+After=network.target geoscene-server.service
+[Service]
+Type=forking
+User=$GS_USER
+Group=$GS_GROUP
+ExecStart=$GS_BASE/datastore/startdatastore.sh
+ExecStop=$GS_BASE/datastore/stopdatastore.sh
+PIDFile=$GS_BASE/datastore/usr/logs/datastore.pid
+Restart=on-failure
+RestartSec=30
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    chmod 644 /etc/systemd/system/geoscene-*.service
+    systemctl daemon-reload
+    systemctl enable geoscene-server.service geoscene-portal.service geoscene-datastore.service
+
+    log_success "systemd 服务配置完成"
+}
+
+#==============================================================================
+# 性能调优
+#==============================================================================
+apply_performance_tuning() {
+    [[ "$DRY_RUN" == true ]] && return 0
+
+    print_task_header "应用性能调优"
+
+    # JVM参数优化
+    local tomcat_setenv="$TOMCAT_HOME/bin/setenv.sh"
+    cat > "$tomcat_setenv" << EOF
+#!/bin/bash
+export CATALINA_OPTS="-server -Xms2g -Xmx4g -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+export JAVA_OPTS="-Djava.security.egd=file:/dev/./urandom"
+EOF
+    chmod +x "$tomcat_setenv"
+    chown "$GS_USER:$GS_GROUP" "$tomcat_setenv"
+
+    # 内核参数优化
+    cat >> /etc/sysctl.conf << EOF
+# GeoScene Performance Tuning
+vm.swappiness=10
+vm.dirty_ratio=40
+net.core.somaxconn=65535
+EOF
+    sysctl -p &>/dev/null || true
+
+    log_success "性能调优应用完成"
+}
+
+#==============================================================================
+# 日志管理
+#==============================================================================
+setup_log_management() {
+    [[ "$DRY_RUN" == true ]] && return 0
+
+    print_task_header "配置日志管理"
+
+    # logrotate配置
+    cat > /etc/logrotate.d/geoscene << EOF
+$GS_BASE/server/usr/logs/*.log $GS_BASE/portal/usr/logs/*.log $GS_BASE/datastore/usr/logs/*.log {
+    daily
+    rotate 30
+    compress
+    missingok
+    notifempty
+    create 644 $GS_USER $GS_GROUP
+}
+EOF
+
+    # 日志收集脚本
+    cat > "$GS_BASE/collect-logs.sh" << 'EOF'
+#!/bin/bash
+OUTPUT_DIR="/tmp/geoscene-logs-$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$OUTPUT_DIR"
+cp -r /var/log/geoscene*.log "$OUTPUT_DIR/" 2>/dev/null || true
+[[ -d "$GS_BASE/server/usr/logs" ]] && cp -r "$GS_BASE/server/usr/logs" "$OUTPUT_DIR/server/" 2>/dev/null || true
+[[ -d "$GS_BASE/portal/usr/logs" ]] && cp -r "$GS_BASE/portal/usr/logs" "$OUTPUT_DIR/portal/" 2>/dev/null || true
+tar -czf "${OUTPUT_DIR}.tar.gz" -C "$(dirname "$OUTPUT_DIR")" "$(basename "$OUTPUT_DIR")"
+rm -rf "$OUTPUT_DIR"
+echo "日志已收集: ${OUTPUT_DIR}.tar.gz"
+EOF
+    chmod +x "$GS_BASE/collect-logs.sh"
+    chown "$GS_USER:$GS_GROUP" "$GS_BASE/collect-logs.sh"
+
+    log_success "日志管理配置完成"
+}
+
+#==============================================================================
+# 修改主函数，添加新功能调用
+#==============================================================================
+main_with_enhancements() {
+    mkdir -p "$(dirname "$LOG_FILE")"; touch "$LOG_FILE"
+
+    echo -e "\033[34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+    echo -e "\033[34m  🚀 GeoScene Universal Installer v${SCRIPT_VERSION}\033[0m"
+    [[ "$DRY_RUN" == true ]] && echo -e "\033[33m  ⚠️  DRY-RUN 模式\033[0m"
+    echo -e "\033[34m  📋 日志: $LOG_FILE\033[0m"
+    echo -e "\033[34m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
+
+    # 创建备份
+    create_backup
+
+    check_prerequisites
+    scan_workspace
+    setup_system
+    configure_hostname_and_hosts
+
+    # 下载依赖
+    if [[ "$AUTO_DOWNLOAD" == true ]]; then
+        download_and_install_jdk
+        download_and_install_tomcat
+    fi
+
+    create_self_signed_certificate
+
+    # 安装组件
+    for comp in server datastore portal webadaptor; do
+        [[ -n "${FOUND_INSTALLERS[$comp]+_}" ]] && install_component "$comp" "${FOUND_INSTALLERS[$comp]}"
+    done
+
+    copy_license_files
+
+    if [[ "$SKIP_CONFIG" == false ]]; then
+        log_host_ip
+        print_task_header "自动化配置阶段 [幂等执行]"
+
+        start_server && authorize_server && create_server_site
+        start_datastore && configure_datastore
+        start_portal && create_portal && update_portal_webcontext
+        configure_webadaptor
+        configure_federation
+
+        # 新增功能
+        setup_systemd_services
+        apply_performance_tuning
+        setup_log_management
+    fi
+
+    # 健康检查
+    perform_health_check
+
+    [[ "$DRY_RUN" == true ]] && log_dry "预演结束" || print_summary
+}
+
+# 执行主程序
+main_with_enhancements "$@"
