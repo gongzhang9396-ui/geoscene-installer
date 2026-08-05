@@ -4,6 +4,11 @@
 
 > 完整的架构、脚本职责、安装/卸载、WebAdaptor、联合托管和排障说明见 [GEOSCENE_SYSTEM_GUIDE.md](GEOSCENE_SYSTEM_GUIDE.md)。
 
+## 更新记录
+
+- **2026-08-05**：合并 GeoScene 6.1 实机验证后的安装、卸载、IPv6、FQDN、证书、systemd、健康检查和日志管理更新；Portal 与 Server WebAdaptor 现在会分别自动部署和注册。Portal-Server 联合托管仍保留为安装后的手动步骤。
+- **安全提醒**：仓库中的 `geoscene.conf` 只包含占位密码。生产部署前必须替换管理员密码、证书密码，并将配置文件权限设置为 `600`。
+
 ## 版本 7.0 新增功能
 
 ### 核心功能
@@ -39,10 +44,11 @@ installgeoscene/
 ├── geoscene.conf                    # 配置文件模板 (强烈推荐使用)
 ├── README.md                        # 本文档
 │
-├── GeoScene_Server_Linux_*.tar.gz   # Server 安装包 (必需)
-├── GeoScene_Portal_Linux_*.tar.gz   # Portal 安装包 (必需)
-├── GeoScene_DataStore_Linux_*.tar.gz # DataStore 安装包 (必需)
-├── GeoScene_Web_Adaptor_java_Linux_*.tar.gz # WebAdaptor 安装包 (必需)
+├── DATA_DIR/                        # 可选：本地安装包和 JDK/Tomcat 压缩包目录
+├── GeoScene_Server_Linux_*.tar.gz   # Server 安装包
+├── GeoScene_Portal_Linux_*.tar.gz   # Portal 安装包
+├── GeoScene_DataStore_Linux_*.tar.gz # DataStore 安装包
+├── GeoScene_Web_Adaptor_java_Linux_*.tar.gz # WebAdaptor 安装包
 │
 ├── *.prvc                           # Server 授权文件 (自动化配置必需)
 ├── *.ecp                            # Server/Enterprise 授权文件 (自动化配置必需)
@@ -53,10 +59,10 @@ installgeoscene/
 
 ### 1. 准备安装文件
 
-将以下文件放置在脚本同目录：
+安装包可以放在脚本同目录，也可以通过 `DATA_DIR`/`--data-dir` 指定目录。缺少 JDK/Tomcat 压缩包时，`AUTO_DOWNLOAD=true` 会尝试联网下载；生产环境建议提前准备经过验证的本地包，或显式配置 `JDK_HOME`、`TOMCAT_HOME` 并设置 `AUTO_DOWNLOAD=false`。
 
 ```bash
-# 安装包 (必需)
+# 本地安装包（推荐放入 DATA_DIR；版本号按实际安装包填写）
 GeoScene_Server_Linux_41_*.tar.gz
 GeoScene_Portal_Linux_41_*.tar.gz
 GeoScene_DataStore_Linux_41_*.tar.gz   # 必需
@@ -500,7 +506,7 @@ A: 检查以下项：
 1. 确保服务器有互联网访问权限
 2. 检查防火墙是否阻止了下载
 3. 手动下载并放置在指定目录
-4. 使用 `--skip-config` 跳过依赖下载（如果已手动安装）
+4. 如果已经手动安装，请在配置中设置 `JDK_HOME`、`TOMCAT_HOME` 和 `AUTO_DOWNLOAD=false`；`--skip-config` 只跳过站点配置，不会关闭依赖准备流程
 
 ### Q: 如何手动安装 JDK/Tomcat？
 
@@ -591,6 +597,9 @@ bash uninstall-geoscene.sh --purge
 
 # 强制彻底清理 (忽略错误)
 bash uninstall-geoscene.sh --purge --force
+
+# 在彻底清理的基础上删除安装备份和日志
+bash uninstall-geoscene.sh --purge --remove-backups --remove-logs
 ```
 
 ### Q: 如何查看安装后的健康状态？
@@ -599,9 +608,10 @@ A: 脚本会在安装完成后自动执行健康检查，也可以手动检查�
 
 ```bash
 # 查看服务状态
-systemctl status geoscene-server
-systemctl status geoscene-portal
-systemctl status geoscene-datastore
+systemctl status geosceneserver
+systemctl status geosceneportal
+systemctl status geoscenedatastore
+systemctl status geoscene-tomcat
 
 # 收集日志
 bash /home/geoscene/geoscene/collect-logs.sh
@@ -616,19 +626,19 @@ A: v7.0 自动配置了 systemd 服务：
 
 ```bash
 # 启动所有服务
-systemctl start geoscene-server geoscene-portal geoscene-datastore
+systemctl start geosceneserver geosceneportal geoscenedatastore geoscene-tomcat
 
 # 停止所有服务
-systemctl stop geoscene-server geoscene-portal geoscene-datastore
+systemctl stop geosceneserver geosceneportal geoscenedatastore geoscene-tomcat
 
 # 重启服务
-systemctl restart geoscene-server
+systemctl restart geosceneserver
 
 # 查看状态
-systemctl status geoscene-server
+systemctl status geosceneserver geosceneportal geoscenedatastore geoscene-tomcat
 
 # 设置开机自启
-systemctl enable geoscene-server geoscene-portal geoscene-datastore
+systemctl enable geosceneserver geosceneportal geoscenedatastore geoscene-tomcat
 ```
 
 ### Q: 安装失败如何回滚？
@@ -674,5 +684,12 @@ A: 常见验证错误及解决：
 | `-h, --help` | 显示帮助信息 |
 | `--man` | 显示完整手册页 |
 | `-f, --purge` | 彻底删除所有数据目录 |
-| `-s, `--silent` | 执行静默卸载 |
-| `--force` | 强制模式，忽略错误 |
+| `-s, --silent` | 调用 GeoScene 官方静默卸载器 |
+| `--force` | 强制模式，忽略单项错误 |
+| `--remove-backups` | 删除安装前备份 |
+| `--remove-logs` | 删除安装日志、健康报告和卸载日志 |
+| `--config=FILE` | 指定配置文件 |
+| `--gs-user=USER` | 指定 GeoScene 运行用户 |
+| `--gs-base=DIR` | 指定 GeoScene 安装基础目录 |
+
+默认卸载不会删除 GeoScene 数据、JDK/Tomcat、用户 home、备份或日志；`--purge` 才会清理安装目录、JDK/Tomcat 和用户 home，备份和日志仍需分别使用 `--remove-backups`、`--remove-logs`。
