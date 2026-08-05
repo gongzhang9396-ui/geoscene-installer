@@ -1,13 +1,15 @@
 # GeoScene Enterprise 全自动化安装部署工具 (v7.0)
 
-全自动安装部署 GeoScene Enterprise (Server + Portal + DataStore + WebAdaptor)，支持一键安装、授权、站点创建、门户初始化、DataStore 配置、主机名配置、域名映射、证书管理、WebAdaptor 自动安装、Portal-Server 联合托管、JDK/Tomcat 自动下载安装、多平台支持、幂等执行。
+自动安装部署 GeoScene Enterprise (Server + Portal + DataStore + WebAdaptor)，支持一键安装、授权、站点创建、门户初始化、DataStore 配置、主机名配置、域名映射、证书管理、WebAdaptor 自动安装、JDK/Tomcat 自动下载安装、多平台支持、幂等执行；Portal-Server 联合托管在安装后手动完成。
+
+> 完整的架构、脚本职责、安装/卸载、WebAdaptor、联合托管和排障说明见 [GEOSCENE_SYSTEM_GUIDE.md](GEOSCENE_SYSTEM_GUIDE.md)。
 
 ## 版本 7.0 新增功能
 
 ### 核心功能
 - **JDK/Tomcat 自动下载安装** - 从 Adoptium/Apache 官方源自动下载安装 (优先 JDK 17)
 - **幂等执行** - 重复运行自动检测并更新现有配置，无需担心重复执行
-- **多平台支持** - 支持 CentOS/Ubuntu/Debian/RHEL/统信UOS/银河麒麟
+- **多平台适配** - 可识别常见 Linux 的包管理器；具体 GeoScene 6.1 是否认证，仍以产品支持矩阵为准
 - **架构检查** - 自动验证安装包与系统架构匹配，拒绝 Windows 安装包
 - **Tomcat 安全加固** - 自动应用安全配置（禁用不安全端口、禁用示例应用）
 - **增强异常处理** - 自动重试机制和错误恢复
@@ -27,7 +29,6 @@
 - **SystemD system.conf 限制配置** - 符合官方要求
 - **自签名 SSL 证书自动创建** - 用于 HTTPS 配置
 - **WebAdaptor 自动安装配置** - 提供 443 端口反向代理
-- **Portal-Server 联合托管配置** - 自动建立托管关系
 
 ## 目录结构
 
@@ -95,6 +96,7 @@ FQDN=portal.geosceneenterprise.cn
 HOSTNAME=portal
 CONFIGURE_HOSTNAME=true
 CONFIGURE_HOSTS=true
+DISABLE_IPV6=true
 
 # 管理员账户配置
 SITE_ADMIN_USER=siteadmin
@@ -117,9 +119,6 @@ WEBADAPTOR_PORT=443
 
 # 证书配置
 CREATE_SELF_SIGNED_CERT=true
-
-# 联合托管配置
-CONFIGURE_FEDERATION=true
 
 # 自动下载配置 (v7.0)
 AUTO_DOWNLOAD=true
@@ -168,6 +167,7 @@ bash install-geoscene.sh --skip-hostname
 | `HOSTNAME` | `` | 主机名，如 `portal` |
 | `CONFIGURE_HOSTNAME` | `true` | 是否配置 `/etc/hostname` |
 | `CONFIGURE_HOSTS` | `true` | 是否配置 `/etc/hosts` |
+| `DISABLE_IPV6` | `true` | 是否禁用IPv6并确保 `localhost` 解析为 `127.0.0.1` |
 
 **为什么需要 FQDN？**
 
@@ -203,6 +203,7 @@ bash install-geoscene.sh --skip-hostname
 | `INSTALL_WEBADAPTOR` | `true` | 是否安装 WebAdaptor |
 | `WEBADAPTOR_PORT` | `443` | WebAdaptor 端口 |
 | `WEBADAPTOR_CONTEXT` | `geoscene` | WebAdaptor 上下文 |
+| `SERVER_WEBADAPTOR_CONTEXT` | `server` | Server WebAdaptor 上下文 |
 
 ### 证书配置
 
@@ -217,12 +218,6 @@ bash install-geoscene.sh --skip-hostname
 | `CERT_EMAIL` | `admin@geoscene.cn` | 证书邮箱 |
 | `CERT_DAYS` | `3650` | 证书有效期(天) |
 | `CERT_PASSWORD` | `geoscene` | 证书密码 |
-
-### 联合托管配置
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `CONFIGURE_FEDERATION` | `true` | 是否配置 Portal-Server 联合托管 |
 
 ### 管理员账户配置
 
@@ -257,6 +252,7 @@ bash install-geoscene.sh --skip-hostname
 | `--config=FILE` | 指定配置文件 |
 | `--skip-config` | 仅安装软件，跳过站点配置 |
 | `--skip-hostname` | 跳过主机名和hosts配置 |
+| `--disable-ipv6` | 禁用IPv6，确保localhost使用IPv4 |
 | `--gs-user=USER` | GeoScene 运行用户 |
 | `--gs-base=DIR` | 安装基础目录 |
 | `--fqdn=DOMAIN` | 设置 FQDN |
@@ -264,7 +260,6 @@ bash install-geoscene.sh --skip-hostname
 | `--jdk-version=VERSION` | JDK 版本 (17/11/8) |
 | `--tomcat-version=VER` | Tomcat 版本 |
 | `--create-cert` | 创建自签名证书 |
-| `--configure-federation` | 配置联合托管 |
 
 ## 自动化工作流程
 
@@ -329,11 +324,10 @@ bash install-geoscene.sh --skip-hostname
 13. 证书导入
     └─ 导入证书到 Server 和 Portal
 
-14. Portal-Server 联合托管
     └─ 配置 Portal 托管 Server 服务
 ```
 
-**流程顺序**: Server → DataStore → Portal → 联合托管
+**流程顺序**: Server → DataStore → Portal → WebAdaptor（分别注册 Portal/Server）；Portal-Server 联合托管请安装后手动完成
 
 DataStore 必须先注册到 Server，才能支持 Portal 的托管服务功能。
 
@@ -430,11 +424,11 @@ bash install-geoscene.sh --fqdn=newdomain.com
 
 ### 7. 实际 IP/FQDN 网络配置
 
-脚本自动检测服务器实际 IP 或使用配置的 FQDN：
-- Server 授权/站点创建使用 `https://<实际IP>:6443`
-- Portal 创建使用 `https://<实际IP>:7443`
-- DataStore 配置使用 `https://<实际IP>:6443`
-- WebContextURL 更新为实际 IP/FQDN
+脚本自动检测服务器实际 IP，并将需要对外注册的地址统一使用配置的 FQDN：
+- Server/Portal 健康检查使用本机地址
+- DataStore 配置使用 `https://<FQDN>:6443`
+- WebAdaptor 注册使用 `https://<FQDN>/geoscene/webadaptor` 和 `https://<FQDN>:7443`
+- WebContextURL 更新为 FQDN
 
 ### 8. PublishingTools 自动启动
 
@@ -444,19 +438,18 @@ DataStore 配置前会自动检查并启动 PublishingTools 服务，确保配�
 
 Portal 创建后会自动更新 WebContextURL 为实际 IP 地址，并重启 Portal 使配置生效，避免 localhost 问题。
 
-### 10. 联合托管自动配置
+### 10. Portal-Server 联合托管（手动）
 
-自动配置 Portal 和 Server 的联合托管关系：
-- 添加 Server 到 Portal
-- 设置为托管服务器
-- 启用托管服务功能
+安装脚本不再自动调用联合 API。请在 WebAdaptor 配置完成后，按产品管理界面或 REST API 文档手动完成 Portal-Server 联合托管。
 
 ## 系统要求
 
+脚本本身不绑定某一个发行版，主要要求目标系统具备 Bash、systemd、常用网络/归档工具以及可用的包管理器。这里的“脚本可运行”不等同于“GeoScene 6.1 已获得官方认证”；生产部署必须同时核对 GeoScene 6.1 的操作系统、补丁级别和 CPU 架构支持矩阵。
+
 | 项目 | 要求 |
 |------|------|
-| 操作系统 | CentOS 7+, RHEL 7+, Ubuntu 18+, 统信 UOS, 银河麒麟 |
-| 架构 | x86_64 或 aarch64 (ARM64) |
+| 操作系统 | Linux（systemd）；麒麟 V10、Ubuntu、RHEL/Rocky 等需按 GeoScene 6.1 支持矩阵确认 |
+| 架构 | x86_64 或 aarch64 (ARM64)；海光 C86 主机通常按 x86_64 检查 |
 | 内存 | ≥ 8GB (生产环境推荐 16GB+) |
 | CPU | ≥ 4核 |
 | 磁盘 | ≥ 20GB (安装目录) + ≥ 30GB (数据目录) |
@@ -464,6 +457,8 @@ Portal 创建后会自动更新 WebContextURL 为实际 IP 地址，并重启 Po
 | 网络 | 可访问互联网（用于下载 JDK/Tomcat） |
 | 权限 | root |
 | 主机名 | **不能包含下划线** (_)，建议使用 FQDN |
+
+说明：CentOS Linux 8 已结束生命周期，不建议新建生产部署；如果使用 CentOS 系列，优先选择仍受维护且被 GeoScene 6.1 支持矩阵覆盖的 RHEL/Rocky 等替代发行版。海光 C86 机器先执行 `uname -m`，若返回 `x86_64` 就使用 x86_64 安装包；ARM 机器必须使用 aarch64/ARM64 安装包，不能混用。
 
 ## 安装结果
 
@@ -546,9 +541,9 @@ A: 脚本会检测文件名包含 `windows`, `win`, `.exe`, `.msi` 的安装包�
 - DataStore: `GeoScene_DataStore_Linux_41_*.tar.gz`
 - WebAdaptor: `GeoScene_Web_Adaptor_java_Linux_41_*.tar.gz`
 
-### Q: 联合托管配置失败怎么办？
+### Q: 如何配置 Portal-Server 联合托管？
 
-A: 如果自动配置联合托管失败，可以手动配置：
+A: 安装脚本不会自动执行联合。请手动配置：
 1. 登录 Portal: `https://<IP>:7443/geoscene/home`
 2. 平台管理 → 系统配置 → 服务器 → 添加服务器
 3. 输入 Server URL 和 Admin URL

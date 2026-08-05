@@ -20,6 +20,12 @@ GS_USER="geoscene"
 GS_GROUP="geoscene"
 GS_HOME="/home/geoscene"
 GS_BASE="/home/geoscene/geoscene"
+DATA_DIR=""
+LICENSE_DIR=""
+SERVER_LICENSE_FILE=""
+PORTAL_LICENSE_FILE=""
+JDK_TARBALL=""
+TOMCAT_TARBALL=""
 SERVER_PORT="6443"
 PORTAL_PORT="7443"
 DATASTORE_PORT="2443"
@@ -43,6 +49,7 @@ HOSTNAME=""
 FQDN=""
 CONFIGURE_HOSTNAME=true
 CONFIGURE_HOSTS=true
+DISABLE_IPV6=true
 
 # WebAdaptor配置（v7.0: 变为必选组件）
 INSTALL_WEBADAPTOR=true
@@ -52,6 +59,7 @@ JDK_VERSION="17"
 JDK_HOME=""
 WEBADAPTOR_PORT="443"
 WEBADAPTOR_CONTEXT="geoscene"
+SERVER_WEBADAPTOR_CONTEXT="server"
 
 # JDK下载配置
 JDK_PROVIDER="adoptium"
@@ -71,9 +79,6 @@ CERT_EMAIL="admin@geoscene.cn"
 CERT_DAYS="3650"
 CERT_PASSWORD="geoscene"
 
-# 联合托管配置
-CONFIGURE_FEDERATION=true
-
 # 自动下载配置
 AUTO_DOWNLOAD=true
 
@@ -81,6 +86,7 @@ CONFIG_FILE=""
 DRY_RUN=false
 SKIP_CONFIG=false
 SKIP_HOSTNAME=false
+REINSTALL=false
 HOST_IP=""
 
 #==============================================================================
@@ -99,6 +105,7 @@ GeoScene Enterprise Installer v7.0
   --config=FILE           指定配置文件 (默认: geoscene.conf)
   --skip-config           仅安装软件，跳过站点配置
   --skip-hostname         跳过主机名和hosts配置
+  --disable-ipv6          禁用IPv6，确保localhost解析为127.0.0.1
   --gs-user=USER          GeoScene 运行用户 (默认: geoscene)
   --gs-base=DIR           安装基础目录 (默认: /home/geoscene/geoscene)
   --fqdn=DOMAIN           设置完全限定域名(FQDN)
@@ -106,7 +113,6 @@ GeoScene Enterprise Installer v7.0
   --jdk-version=VERSION   JDK版本 (17/11/8, 默认: 17)
   --tomcat-version=VER    Tomcat版本 (默认: 9.0.89)
   --create-cert           创建自签名证书
-  --configure-federation  配置Portal-Server联合托管
 
 必需组件 (v7.0):
   - Server安装包 (GeoScene_Server_Linux_*.tar.gz)
@@ -137,7 +143,7 @@ GEOSCENE-INSTALL(1)          GeoScene Enterprise Installer
     本脚本提供 GeoScene Enterprise (Server, Portal, DataStore, WebAdaptor)
     的全自动安装部署，包括软件安装、授权、站点创建、门户初始化、
     DataStore配置、主机名配置、域名映射、证书管理、WebAdaptor自动安装、
-    Portal-Server联合托管、JDK/Tomcat自动下载安装、多平台支持、幂等执行。
+    JDK/Tomcat自动下载安装、多平台支持、幂等执行。
 
 必需组件 (v7.0)
     - Server安装包 (GeoScene_Server_Linux_*.tar.gz)
@@ -156,11 +162,11 @@ GEOSCENE-INSTALL(1)          GeoScene Enterprise Installer
     6. Server授权和站点创建
     7. DataStore配置
     8. Portal门户创建
-    9. WebAdaptor配置和联合托管
+    9. WebAdaptor配置
 
 版本历史
     v7.0 - 新增: JDK/Tomcat自动下载、幂等执行、多平台支持、架构检查
-    v6.0 - 新增: 主机名/FQDN配置、证书管理、WebAdaptor、联合托管
+    v6.0 - 新增: 主机名/FQDN配置、证书管理、WebAdaptor
     v5.1 - 增强稳定性
     v5.0 - 全自动化配置
 EOF
@@ -176,7 +182,10 @@ for arg in "$@"; do
         --man) show_man; exit 0 ;;
         --skip-config) SKIP_CONFIG=true ;;
         --skip-hostname) SKIP_HOSTNAME=true ;;
+        --disable-ipv6) DISABLE_IPV6=true ;;
+        --reinstall) REINSTALL=true ;;
         --config=*) CONFIG_FILE="${arg#*=}" ;;
+        --data-dir=*) DATA_DIR="${arg#*=}" ;;
         --gs-user=*) GS_USER="${arg#*=}" ;;
         --gs-base=*) GS_BASE="${arg#*=}" ;;
         --fqdn=*) FQDN="${arg#*=}" ;;
@@ -184,7 +193,6 @@ for arg in "$@"; do
         --jdk-version=*) JDK_VERSION="${arg#*=}" ;;
         --tomcat-version=*) TOMCAT_VERSION="${arg#*=}" ;;
         --create-cert) CREATE_SELF_SIGNED_CERT=true ;;
-        --configure-federation) CONFIGURE_FEDERATION=true ;;
     esac
 done
 
@@ -209,6 +217,12 @@ load_config_from_file() {
                 GS_GROUP) GS_GROUP="$value" ;;
                 GS_HOME) GS_HOME="$value" ;;
                 GS_BASE) GS_BASE="$value" ;;
+                DATA_DIR) DATA_DIR="$value" ;;
+                LICENSE_DIR) LICENSE_DIR="$value" ;;
+                SERVER_LICENSE_FILE) SERVER_LICENSE_FILE="$value" ;;
+                PORTAL_LICENSE_FILE) PORTAL_LICENSE_FILE="$value" ;;
+                JDK_TARBALL) JDK_TARBALL="$value" ;;
+                TOMCAT_TARBALL) TOMCAT_TARBALL="$value" ;;
                 SERVER_PORT) SERVER_PORT="$value" ;;
                 PORTAL_PORT) PORTAL_PORT="$value" ;;
                 DATASTORE_PORT) DATASTORE_PORT="$value" ;;
@@ -229,6 +243,7 @@ load_config_from_file() {
                 FQDN) FQDN="$value" ;;
                 CONFIGURE_HOSTNAME) [[ "$value" == "true" ]] && CONFIGURE_HOSTNAME=true || CONFIGURE_HOSTNAME=false ;;
                 CONFIGURE_HOSTS) [[ "$value" == "true" ]] && CONFIGURE_HOSTS=true || CONFIGURE_HOSTS=false ;;
+                DISABLE_IPV6) [[ "$value" == "true" ]] && DISABLE_IPV6=true || DISABLE_IPV6=false ;;
                 INSTALL_WEBADAPTOR) [[ "$value" == "true" ]] && INSTALL_WEBADAPTOR=true || INSTALL_WEBADAPTOR=false ;;
                 TOMCAT_HOME) TOMCAT_HOME="$value" ;;
                 JDK_HOME) JDK_HOME="$value" ;;
@@ -236,6 +251,7 @@ load_config_from_file() {
                 TOMCAT_VERSION) TOMCAT_VERSION="$value" ;;
                 WEBADAPTOR_PORT) WEBADAPTOR_PORT="$value" ;;
                 WEBADAPTOR_CONTEXT) WEBADAPTOR_CONTEXT="$value" ;;
+                SERVER_WEBADAPTOR_CONTEXT) SERVER_WEBADAPTOR_CONTEXT="$value" ;;
                 CREATE_SELF_SIGNED_CERT) [[ "$value" == "true" ]] && CREATE_SELF_SIGNED_CERT=true || CREATE_SELF_SIGNED_CERT=false ;;
                 CERT_COUNTRY) CERT_COUNTRY="$value" ;;
                 CERT_STATE) CERT_STATE="$value" ;;
@@ -245,7 +261,6 @@ load_config_from_file() {
                 CERT_EMAIL) CERT_EMAIL="$value" ;;
                 CERT_DAYS) CERT_DAYS="$value" ;;
                 CERT_PASSWORD) CERT_PASSWORD="$value" ;;
-                CONFIGURE_FEDERATION) [[ "$value" == "true" ]] && CONFIGURE_FEDERATION=true || CONFIGURE_FEDERATION=false ;;
                 AUTO_DOWNLOAD) [[ "$value" == "true" ]] && AUTO_DOWNLOAD=true || AUTO_DOWNLOAD=false ;;
             esac
         done < "$conf_path"
@@ -260,6 +275,8 @@ for arg in "$@"; do
     case "$arg" in
         --gs-user=*) GS_USER="${arg#*=}" ;;
         --gs-base=*) GS_BASE="${arg#*=}" ;;
+        --data-dir=*) DATA_DIR="${arg#*=}" ;;
+        --reinstall) REINSTALL=true ;;
         --fqdn=*) FQDN="${arg#*=}" ;;
         --hostname=*) HOSTNAME="${arg#*=}" ;;
         --tomcat-home=*) TOMCAT_HOME="${arg#*=}" ;;
@@ -276,13 +293,16 @@ readonly LOG_FILE="/var/log/geoscene_$(date +%Y%m%d_%H%M%S).log"
 readonly SILENT_FLAGS="-m silent -l yes"
 readonly STATE_FILE="/var/log/.geoscene_install_state"
 readonly LIMITS_CONF="/etc/security/limits.d/99-geoscene.conf"
-REQUIRED_PORTS=("$SERVER_PORT" "$PORTAL_PORT" "$DATASTORE_PORT" "9876" "9877" "443")
+REQUIRED_PORTS=("$SERVER_PORT" "$PORTAL_PORT" "$DATASTORE_PORT" "9876" "9877")
+[[ "$INSTALL_WEBADAPTOR" == true ]] && REQUIRED_PORTS+=("$WEBADAPTOR_PORT")
 
 # 设置默认值
 [[ -n "$JDK_VERSION" ]] || JDK_VERSION="17"
 [[ -n "$TOMCAT_VERSION" ]] || TOMCAT_VERSION="9.0.89"
 [[ -n "$JDK_HOME" ]] || JDK_HOME="$GS_BASE/jdk"
 [[ -n "$TOMCAT_HOME" ]] || TOMCAT_HOME="$GS_BASE/tomcat"
+[[ -n "$DATA_DIR" ]] || DATA_DIR="$SCRIPT_DIR"
+[[ -n "$LICENSE_DIR" ]] || LICENSE_DIR="$DATA_DIR/licfile"
 WEBADAPTOR_SSL_DIR="$TOMCAT_HOME/ssl"
 WEBADAPTOR_CERT_PREFIX="webcert"
 
@@ -398,6 +418,20 @@ get_current_fqdn() {
     hostname -f 2>/dev/null || hostname 2>/dev/null || echo "localhost"
 }
 
+disable_ipv6() {
+    [[ "$DRY_RUN" == true ]] && { log_dry "跳过: 禁用IPv6"; return 0; }
+    [[ "$DISABLE_IPV6" == true ]] || return 0
+
+    print_subtask "禁用IPv6，固定localhost为IPv4..."
+    cat > /etc/sysctl.d/99-geoscene-ipv6.conf << 'EOF'
+net.ipv6.conf.all.disable_ipv6=1
+net.ipv6.conf.default.disable_ipv6=1
+net.ipv6.conf.lo.disable_ipv6=1
+EOF
+    sysctl --load=/etc/sysctl.d/99-geoscene-ipv6.conf >/dev/null 2>&1 || true
+    log_success "IPv6已禁用 [幂等执行]"
+}
+
 #==============================================================================
 # 安装包扫描
 #==============================================================================
@@ -415,7 +449,7 @@ declare -ga COMPONENT_QUEUE=()
 scan_workspace() {
     FOUND_INSTALLERS=(); FOUND_LICENSES=(); COMPONENT_QUEUE=()
 
-    for f in "$SCRIPT_DIR"/*; do
+    for f in "$DATA_DIR"/*; do
         [[ -f "$f" ]] || continue
         local base="${f##*/}"
         local lower; lower=$(to_lower "$base")
@@ -455,14 +489,41 @@ scan_workspace() {
                 FOUND_INSTALLERS[webadaptor]="$f"; COMPONENT_QUEUE+=(webadaptor)
             fi
 
-        elif [[ "$base" == *.prvc || "$base" == *.ecp ]]; then
-            FOUND_LICENSES[server]="$f"
-        elif [[ "$base" == *.json ]]; then
-            if [[ "$lower" == *portal* || "$lower" == *enterprise* ]]; then
-                FOUND_LICENSES[portal]="$f"
-            fi
         fi
     done
+
+    local server_license="$SERVER_LICENSE_FILE"
+    local portal_license="$PORTAL_LICENSE_FILE"
+    [[ -n "$server_license" && "$server_license" != /* ]] && server_license="$LICENSE_DIR/$server_license"
+    [[ -n "$portal_license" && "$portal_license" != /* ]] && portal_license="$LICENSE_DIR/$portal_license"
+
+    if [[ -n "$server_license" ]]; then
+        [[ -f "$server_license" ]] || { log_error "Server授权文件不存在: $server_license"; exit 1; }
+        FOUND_LICENSES[server]="$server_license"
+    else
+        local server_candidates=()
+        mapfile -t server_candidates < <(find "$LICENSE_DIR" "$DATA_DIR" -maxdepth 1 -type f \( -iname '*.prvc' -o -iname '*.ecp' \) -print 2>/dev/null | sort -u)
+        if [[ ${#server_candidates[@]} -ne 1 ]]; then
+            log_error "Server授权文件不唯一，请配置 SERVER_LICENSE_FILE；候选数量: ${#server_candidates[@]}"
+            printf '  %s\n' "${server_candidates[@]}"
+            exit 1
+        fi
+        FOUND_LICENSES[server]="${server_candidates[0]}"
+    fi
+
+    if [[ -n "$portal_license" ]]; then
+        [[ -f "$portal_license" ]] || { log_error "Portal授权文件不存在: $portal_license"; exit 1; }
+        FOUND_LICENSES[portal]="$portal_license"
+    else
+        local portal_candidates=()
+        mapfile -t portal_candidates < <(find "$LICENSE_DIR" "$DATA_DIR" -maxdepth 1 -type f -iname '*.json' \( -iname '*portal*' -o -iname '*enterprise*' \) -print 2>/dev/null | sort -u)
+        if [[ ${#portal_candidates[@]} -ne 1 ]]; then
+            log_error "Portal授权文件不唯一，请配置 PORTAL_LICENSE_FILE；候选数量: ${#portal_candidates[@]}"
+            printf '  %s\n' "${portal_candidates[@]}"
+            exit 1
+        fi
+        FOUND_LICENSES[portal]="${portal_candidates[0]}"
+    fi
 
     if [[ ${#COMPONENT_QUEUE[@]} -eq 0 ]]; then
         log_error "未找到任何 GeoScene 安装包 (.tar.gz)"
@@ -698,6 +759,59 @@ create_backup() {
 }
 
 #==============================================================================
+# 重装前清理：停止服务并移动旧目录，保留可恢复备份
+#==============================================================================
+prepare_reinstall() {
+    [[ "$DRY_RUN" == true || "$REINSTALL" == false ]] && return 0
+
+    local backup_dir=""
+    [[ -f /tmp/geoscene_last_backup.txt ]] && backup_dir=$(< /tmp/geoscene_last_backup.txt)
+    [[ -n "$backup_dir" && -d "$backup_dir" ]] || {
+        backup_dir="$GS_HOME/.geoscene_backup/$(date +%Y%m%d_%H%M%S)"
+        mkdir -p "$backup_dir"
+    }
+
+    print_task_header "重装前清理（可恢复）"
+
+    local units=(geosceneserver geosceneportal geoscenedatastore geoscene-tomcat
+                 geoscene-server geoscene-portal geoscene-datastore)
+    local unit
+    for unit in "${units[@]}"; do
+        systemctl stop "$unit.service" 2>/dev/null || true
+        systemctl disable "$unit.service" 2>/dev/null || true
+        if [[ -f "/etc/systemd/system/$unit.service" ]]; then
+            mkdir -p "$backup_dir/systemd"
+            mv "/etc/systemd/system/$unit.service" "$backup_dir/systemd/"
+        fi
+    done
+    systemctl daemon-reload 2>/dev/null || true
+
+    # 官方停止脚本作为 systemd 之外的兜底
+    for comp in server portal datastore; do
+        local stop_script="$GS_BASE/$comp/stop${comp}.sh"
+        [[ -x "$stop_script" ]] && runuser -u "$GS_USER" -- "$stop_script" 2>/dev/null || true
+    done
+
+    local old_root="$backup_dir/old-install"
+    mkdir -p "$old_root"
+    local label path
+    for label in server portal datastore jdk tomcat; do
+        case "$label" in
+            server|portal|datastore) path="$GS_BASE/$label" ;;
+            jdk) path="$JDK_HOME" ;;
+            tomcat) path="$TOMCAT_HOME" ;;
+        esac
+        [[ -d "$path" ]] || continue
+        # 防止配置把多个组件指向同一个目录时重复移动
+        [[ -e "$old_root/$label" ]] && continue
+        mv "$path" "$old_root/$label"
+        print_subtask "已移动旧目录: $path"
+    done
+
+    log_success "旧安装已保存在: $old_root"
+}
+
+#==============================================================================
 # 回滚功能
 #==============================================================================
 rollback_installation() {
@@ -776,9 +890,27 @@ check_prerequisites() {
     # 端口检查
     local conflict=false
     for port in "${REQUIRED_PORTS[@]}"; do
-        if ss -tulnH 2>/dev/null | grep -qE ":${port}$" || \
-           netstat -tuln 2>/dev/null | grep -qE ":${port}[[:space:]]"; then
-            log_error "端口 $port 已占用"
+        local listeners=""
+        listeners=$(ss -ltnpH 2>/dev/null | grep -E ":${port}([[:space:]]|$)" || true)
+        [[ -z "$listeners" ]] && continue
+
+        # Idempotent reruns must accept listeners owned by this installation.
+        # Reject only a listener whose command line clearly belongs to another
+        # service, while still allowing Java/PostgreSQL component processes.
+        local owned=false pid cmd
+        while read -r _ _ _ _ _ process; do
+            pid=$(echo "$process" | grep -oP 'pid=\K[0-9]+' | head -1 || true)
+            [[ -z "$pid" ]] && continue
+            cmd=$(ps -p "$pid" -o args= 2>/dev/null || true)
+            if [[ "$cmd" == *"$GS_BASE"* || "$cmd" == *"$TOMCAT_HOME"* ]]; then
+                owned=true
+                break
+            fi
+        done <<< "$listeners"
+        if [[ "$owned" == true ]]; then
+            log_info "端口 $port 已由 GeoScene 组件占用 [幂等执行]"
+        else
+            log_error "端口 $port 已被其他进程占用"
             conflict=true
         fi
     done
@@ -809,6 +941,11 @@ setup_system() {
     else
         log_info "用户已存在: $GS_USER"
     fi
+
+    # create_backup may have created GS_HOME before useradd ran.  Ensure the
+    # service account can write its own home before any vendor installer runs.
+    mkdir -p "$GS_HOME"
+    chown "$GS_USER:$GS_GROUP" "$GS_HOME"
 
     # 配置 limits.conf（幂等）
     local limits_content="# GeoScene Enterprise - managed by installer
@@ -909,14 +1046,15 @@ configure_hostname_and_hosts() {
         # 移除旧的相同IP条目
         grep -v "^${host_ip}[[:space:]]" "$hosts_file" > "${hosts_file}.tmp" 2>/dev/null || cat "$hosts_file" > "${hosts_file}.tmp"
 
-        # 添加新的hosts条目
+        # 添加新的hosts条目；禁用IPv6时不要保留::1 localhost映射。
         cat > "${hosts_file}.new" << EOF
 127.0.0.1   localhost localhost.localdomain localhost4 localhost4.localdomain4
-::1         localhost localhost.localdomain localhost6 localhost6.localdomain6
-
 # GeoScene Enterprise Configuration
 ${host_ip}   ${FQDN} ${HOSTNAME}
 EOF
+        if [[ "$DISABLE_IPV6" != true ]]; then
+            sed -i '2i::1         localhost localhost.localdomain localhost6 localhost6.localdomain6' "${hosts_file}.new"
+        fi
         grep -v "^#" "${hosts_file}.tmp" | grep -v "^127\." | grep -v "^::" | grep -v "^${host_ip}[[:space:]]" >> "${hosts_file}.new" 2>/dev/null || true
         mv "${hosts_file}.new" "$hosts_file"
         rm -f "${hosts_file}.tmp"
@@ -931,7 +1069,6 @@ EOF
 #==============================================================================
 download_and_install_jdk() {
     [[ "$DRY_RUN" == true ]] && { log_dry "跳过: JDK下载安装"; return 0; }
-    [[ "$AUTO_DOWNLOAD" == false ]] && { log_info "跳过JDK自动下载 (AUTO_DOWNLOAD=false)"; return 0; }
 
     # 检查是否已安装
     if [[ -d "$JDK_HOME" ]] && [[ -f "$JDK_HOME/bin/java" ]]; then
@@ -939,7 +1076,23 @@ download_and_install_jdk() {
         return 0
     fi
 
-    print_task_header "下载并安装 Adoptium JDK ${JDK_VERSION}"
+    print_task_header "准备 JDK ${JDK_VERSION}"
+
+    local jdk_tarball="$JDK_TARBALL" downloaded=false
+    if [[ -z "$jdk_tarball" ]]; then
+        jdk_tarball=$(find "$DATA_DIR" -maxdepth 1 -type f -iname 'jdk*.tar.gz' -print 2>/dev/null | sort | head -n1)
+    elif [[ "$jdk_tarball" != /* ]]; then
+        jdk_tarball="$DATA_DIR/$jdk_tarball"
+    fi
+
+    if [[ -n "$jdk_tarball" && -f "$jdk_tarball" ]]; then
+        print_subtask "使用本地 JDK 包: $(basename "$jdk_tarball")"
+    elif [[ "$AUTO_DOWNLOAD" == false ]]; then
+        log_error "未找到本地 JDK 包，且 AUTO_DOWNLOAD=false"
+        return 1
+    else
+        print_subtask "从 Adoptium 下载 JDK..."
+    fi
 
     local arch=$(uname -m)
     local jvm_arch=""
@@ -949,33 +1102,29 @@ download_and_install_jdk() {
         *) log_error "不支持的架构: $arch"; return 1 ;;
     esac
 
-    local jdk_url="${JDK_BASE_URL}/v3/binary/latest/${JDK_VERSION}/ga/linux/${jvm_arch}/jdk/hotspot/normal/eclipse"
-
-    print_subtask "下载JDK..."
     mkdir -p "$JDK_HOME"
-    local jdk_tarball="/tmp/jdk-${JDK_VERSION}-${jvm_arch}.tar.gz"
-
-    local download_success=false
-    if command -v curl &>/dev/null; then
-        curl -fSL --retry 3 "$jdk_url" -o "$jdk_tarball" 2>/dev/null && download_success=true
-    elif command -v wget &>/dev/null; then
-        wget --tries=3 "$jdk_url" -O "$jdk_tarball" 2>/dev/null && download_success=true
-    fi
-
-    if [[ "$download_success" == false ]] || [[ ! -s "$jdk_tarball" ]]; then
-        log_error "JDK下载失败"
-        rm -f "$jdk_tarball"
-        return 1
+    if [[ ! -f "$jdk_tarball" ]]; then
+        local jdk_url="${JDK_BASE_URL}/v3/binary/${JDK_VERSION}/ga/linux/${jvm_arch}/jdk/hotspot/normal/eclipse"
+        jdk_tarball="/tmp/jdk-${JDK_VERSION}-${jvm_arch}.tar.gz"
+        downloaded=true
+        if command -v curl &>/dev/null; then
+            curl -fSL --retry 3 "$jdk_url" -o "$jdk_tarball" 2>/dev/null || return 1
+        elif command -v wget &>/dev/null; then
+            wget --tries=3 "$jdk_url" -O "$jdk_tarball" 2>/dev/null || return 1
+        else
+            log_error "缺少 curl/wget，无法下载 JDK"
+            return 1
+        fi
     fi
 
     print_subtask "解压JDK..."
     rm -rf "$JDK_HOME"/* 2>/dev/null || true
     if ! tar -xzf "$jdk_tarball" -C "$JDK_HOME" --strip-components=1; then
         log_error "JDK解压失败"
-        rm -f "$jdk_tarball"
+        [[ "$downloaded" == true ]] && rm -f "$jdk_tarball"
         return 1
     fi
-    rm -f "$jdk_tarball"
+    [[ "$downloaded" == true ]] && rm -f "$jdk_tarball"
 
     chown -R "$GS_USER:$GS_GROUP" "$JDK_HOME"
 
@@ -996,7 +1145,6 @@ EOF
 #==============================================================================
 download_and_install_tomcat() {
     [[ "$DRY_RUN" == true ]] && { log_dry "跳过: Tomcat下载安装"; return 0; }
-    [[ "$AUTO_DOWNLOAD" == false ]] && { log_info "跳过Tomcat自动下载 (AUTO_DOWNLOAD=false)"; return 0; }
 
     # 检查是否已安装
     if [[ -d "$TOMCAT_HOME" ]] && [[ -f "$TOMCAT_HOME/bin/catalina.sh" ]]; then
@@ -1004,34 +1152,46 @@ download_and_install_tomcat() {
         return 0
     fi
 
-    print_task_header "下载并安装 Apache Tomcat ${TOMCAT_VERSION}"
+    print_task_header "准备 Apache Tomcat ${TOMCAT_VERSION}"
 
-    local tomcat_url="${TOMCAT_BASE_URL}/v${TOMCAT_VERSION}/bin/apache-tomcat-${TOMCAT_VERSION}.tar.gz"
-    local tomcat_tarball="/tmp/apache-tomcat-${TOMCAT_VERSION}.tar.gz"
-
-    print_subtask "下载Tomcat..."
-    mkdir -p "$TOMCAT_HOME"
-
-    local download_success=false
-    if command -v curl &>/dev/null; then
-        curl -fSL --retry 3 "$tomcat_url" -o "$tomcat_tarball" 2>/dev/null && download_success=true
-    elif command -v wget &>/dev/null; then
-        wget --tries=3 "$tomcat_url" -O "$tomcat_tarball" 2>/dev/null && download_success=true
+    local tomcat_tarball="$TOMCAT_TARBALL" downloaded=false
+    if [[ -z "$tomcat_tarball" ]]; then
+        tomcat_tarball=$(find "$DATA_DIR" -maxdepth 1 -type f \( -iname 'tomcat*.tar.gz' -o -iname 'apache-tomcat*.tar.gz' \) -print 2>/dev/null | sort | head -n1)
+    elif [[ "$tomcat_tarball" != /* ]]; then
+        tomcat_tarball="$DATA_DIR/$tomcat_tarball"
     fi
 
-    if [[ "$download_success" == false ]] || [[ ! -s "$tomcat_tarball" ]]; then
-        log_error "Tomcat下载失败"
-        rm -f "$tomcat_tarball"
+    if [[ -n "$tomcat_tarball" && -f "$tomcat_tarball" ]]; then
+        print_subtask "使用本地 Tomcat 包: $(basename "$tomcat_tarball")"
+    elif [[ "$AUTO_DOWNLOAD" == false ]]; then
+        log_error "未找到本地 Tomcat 包，且 AUTO_DOWNLOAD=false"
         return 1
+    else
+        print_subtask "从 Apache 下载 Tomcat..."
+    fi
+
+    mkdir -p "$TOMCAT_HOME"
+    if [[ ! -f "$tomcat_tarball" ]]; then
+        local tomcat_url="${TOMCAT_BASE_URL}/v${TOMCAT_VERSION}/bin/apache-tomcat-${TOMCAT_VERSION}.tar.gz"
+        tomcat_tarball="/tmp/apache-tomcat-${TOMCAT_VERSION}.tar.gz"
+        downloaded=true
+        if command -v curl &>/dev/null; then
+            curl -fSL --retry 3 "$tomcat_url" -o "$tomcat_tarball" 2>/dev/null || return 1
+        elif command -v wget &>/dev/null; then
+            wget --tries=3 "$tomcat_url" -O "$tomcat_tarball" 2>/dev/null || return 1
+        else
+            log_error "缺少 curl/wget，无法下载 Tomcat"
+            return 1
+        fi
     fi
 
     print_subtask "解压Tomcat..."
     if ! tar -xzf "$tomcat_tarball" -C "$TOMCAT_HOME" --strip-components=1; then
         log_error "Tomcat解压失败"
-        rm -f "$tomcat_tarball"
+        [[ "$downloaded" == true ]] && rm -f "$tomcat_tarball"
         return 1
     fi
-    rm -f "$tomcat_tarball"
+    [[ "$downloaded" == true ]] && rm -f "$tomcat_tarball"
 
     # Tomcat安全加固
     print_subtask "应用Tomcat安全配置..."
@@ -1040,13 +1200,52 @@ download_and_install_tomcat() {
     local server_xml="$TOMCAT_HOME/conf/server.xml"
     if [[ -f "$server_xml" ]]; then
         cp "$server_xml" "${server_xml}.bak.$(date +%Y%m%d%H%M%S)"
-        sed -i 's/<Connector port="8080"/<Connector port="-1" disabled="true"/g' "$server_xml"
-        sed -i 's/<Connector port="8009"/<Connector port="-1" disabled="true"/g' "$server_xml"
+        sanitize_tomcat_connectors "$server_xml" || {
+            log_error "Tomcat server.xml 连接器清理失败"
+            return 1
+        }
         log_success "Tomcat安全配置已应用 [幂等执行]"
     fi
 
     chown -R "$GS_USER:$GS_GROUP" "$TOMCAT_HOME"
     log_success "Tomcat安装完成 [幂等执行]"
+}
+
+sanitize_tomcat_connectors() {
+    local server_xml="$1"
+    [[ -f "$server_xml" ]] || return 0
+
+    local tmp_xml="${server_xml}.tmp.$$"
+    if ! awk '
+        BEGIN { skip = 0; in_comment = 0 }
+        {
+            line = $0
+            if (skip) {
+                if (line ~ /\/>[[:space:]]*$/ || line ~ /<\/Connector>/) skip = 0
+                next
+            }
+            if (in_comment) {
+                print
+                if (index(line, "-->") > 0) in_comment = 0
+                next
+            }
+            if (index(line, "<!--") > 0) {
+                print
+                if (index(line, "-->") == 0) in_comment = 1
+                next
+            }
+            if (line ~ /^[[:space:]]*<Connector[[:space:]]+port="(8080|8009)"/) {
+                if (line !~ /\/>[[:space:]]*$/ && line !~ /<\/Connector>/) skip = 1
+                next
+            }
+            print
+        }
+    ' "$server_xml" > "$tmp_xml"; then
+        rm -f "$tmp_xml"
+        return 1
+    fi
+    mv "$tmp_xml" "$server_xml"
+    sed -i -E 's/[[:space:]]disabled="true"//g' "$server_xml"
 }
 
 #==============================================================================
@@ -1142,19 +1341,28 @@ install_component() {
         return 1
     fi
 
-    chown -R "$GS_USER:$GS_GROUP" "$extract_dir"
-
     local installer=$(find "$extract_dir" -maxdepth 3 -type f \( -iname "Setup" -o -iname "setup.sh" \) -executable 2>/dev/null | head -n1)
     [[ -z "$installer" ]] && { log_error "未找到安装入口"; rm -rf "$extract_dir"; return 1; }
 
     print_subtask "执行静默安装..."
-    if ! runuser -u "$GS_USER" -- bash -c "cd '$(dirname "$installer")' && './$(basename "$installer")' $SILENT_FLAGS"; then
+    local install_dir="$(gs_install_dir "$comp")"
+    mkdir -p "$install_dir"
+    chown "$GS_USER:$GS_GROUP" "$install_dir"
+    chown -R "$GS_USER:$GS_GROUP" "$extract_dir"
+    local setup_args=(-m silent -l yes -d "$install_dir")
+    [[ "$comp" == webadaptor ]] && setup_args=(-l yes -d "$install_dir")
+    if [[ "$comp" == server && -n "${FOUND_LICENSES[server]+_}" ]]; then
+        setup_args+=(-a "${FOUND_LICENSES[server]}")
+    fi
+    if ! (cd "$(dirname "$installer")" && runuser -u "$GS_USER" -- env HOME="$GS_HOME" JAVA_HOME="$JDK_HOME" PATH="$JDK_HOME/bin:$PATH" "$installer" "${setup_args[@]}"); then
         log_error "$comp 安装失败"
         rm -rf "$extract_dir"
         return 1
     fi
 
     rm -rf "$extract_dir"
+    [[ -d "$install_dir" ]] || { log_error "$comp 安装目录未生成: $install_dir"; return 1; }
+    chown -R "$GS_USER:$GS_GROUP" "$install_dir"
     touch "$(gs_install_dir "$comp")/.geoscene_installed"
     log_success "$comp 安装完成 [幂等执行]"
 }
@@ -1181,12 +1389,17 @@ copy_license_files() {
 
         cp "$lic_file" "$lic_dest"
         chown "$GS_USER:$GS_GROUP" "$lic_dest"
-        chmod 644 "$lic_dest"
+        chmod 600 "$lic_dest"
         print_subtask "复制授权: $lic_name [幂等执行]"
         (( copied++ )) || true
     done
 
-    [[ $copied -gt 0 ]] && log_success "授权文件复制完成 ($copied 个) [幂等执行]"
+    if [[ $copied -gt 0 ]]; then
+        log_success "授权文件复制完成 ($copied 个) [幂等执行]"
+    else
+        log_info "授权文件无需复制 [幂等执行]"
+    fi
+    return 0
 }
 
 #==============================================================================
@@ -1197,13 +1410,13 @@ start_server() {
     local start_script="$GS_BASE/server/startserver.sh"
     [[ ! -f "$start_script" ]] && return 1
 
-    if pgrep -f "geoscene.*server" &>/dev/null; then
+    if ss -ltnH 2>/dev/null | grep -qE ":${SERVER_PORT}[[:space:]]"; then
         log_info "Server 已在运行 [幂等执行]"
         return 0
     fi
 
     print_subtask "启动 GeoScene Server..."
-    runuser -u "$GS_USER" -- "$start_script" || true
+    runuser -u "$GS_USER" -- env JAVA_HOME="$JDK_HOME" PATH="$JDK_HOME/bin:$PATH" "$start_script" || true
 
     local max_wait=120 elapsed=0
     while [[ $elapsed -lt $max_wait ]]; do
@@ -1288,13 +1501,13 @@ start_datastore() {
     local start_script="$GS_BASE/datastore/startdatastore.sh"
     [[ ! -f "$start_script" ]] && return 1
 
-    if pgrep -f "geoscene.*datastore" &>/dev/null; then
+    if ss -ltnH 2>/dev/null | grep -qE ":${DATASTORE_PORT}[[:space:]]"; then
         log_info "DataStore 已在运行 [幂等执行]"
         return 0
     fi
 
     print_subtask "启动 GeoScene DataStore..."
-    runuser -u "$GS_USER" -- "$start_script" || true
+    runuser -u "$GS_USER" -- env JAVA_HOME="$JDK_HOME" PATH="$JDK_HOME/bin:$PATH" "$start_script" || true
 
     local max_wait=120 elapsed=0
     while [[ $elapsed -lt $max_wait ]]; do
@@ -1317,14 +1530,20 @@ configure_datastore() {
     [[ ! -f "$ds_tool" ]] && { log_error "未找到DataStore配置工具"; return 1; }
 
     local host_ip=$(get_host_ip)
+    local public_host="${FQDN:-$host_ip}"
     local ds_data="$GS_BASE/datastore/usr/datastore"
     mkdir -p "$ds_data"
     chown -R "$GS_USER:$GS_GROUP" "$ds_data"
 
+    if [[ -f "$ds_data/etc/relational-config.json" ]]; then
+        log_info "DataStore relational 存储已配置 [幂等执行]"
+        return 0
+    fi
+
     if runuser -u "$GS_USER" -- "$ds_tool" \
-        "https://${host_ip}:${SERVER_PORT}/geoscene/admin" \
+        "https://${public_host}:${SERVER_PORT}" \
         "$SITE_ADMIN_USER" "$SITE_ADMIN_PASS" "$ds_data" \
-        --stores relational,spatiotemporal; then
+        --stores relational; then
         log_success "DataStore 配置成功 [幂等执行]"
         return 0
     else
@@ -1341,13 +1560,13 @@ start_portal() {
     local start_script="$GS_BASE/portal/startportal.sh"
     [[ ! -f "$start_script" ]] && return 1
 
-    if pgrep -f "geoscene.*portal" &>/dev/null; then
+    if ss -ltnH 2>/dev/null | grep -qE ":${PORTAL_PORT}[[:space:]]"; then
         log_info "Portal 已在运行 [幂等执行]"
         return 0
     fi
 
     print_subtask "启动 GeoScene Portal..."
-    runuser -u "$GS_USER" -- "$start_script" || true
+    runuser -u "$GS_USER" -- env JAVA_HOME="$JDK_HOME" PATH="$JDK_HOME/bin:$PATH" "$start_script" || true
 
     local max_wait=180 elapsed=0
     while [[ $elapsed -lt $max_wait ]]; do
@@ -1362,9 +1581,14 @@ start_portal() {
 }
 
 check_portal_initialized() {
+    # The uninitialized Portal endpoint returns a default JSON document that
+    # contains a placeholder id (0123456789ABCDEF).  Use the config-store
+    # file as the authoritative initialization marker instead of matching any
+    # arbitrary nested "id" field in that document.
+    [[ -f "$GS_BASE/portal/framework/etc/config-store-connection.json" ]] || return 1
     local host_ip=$(get_host_ip)
     local response=$(curl -sk "https://${host_ip}:${PORTAL_PORT}/geoscene/sharing/rest/portals/self?f=json" 2>/dev/null)
-    echo "$response" | grep -q '"id"' && ! echo "$response" | grep -qi "not initialized"
+    echo "$response" | grep -q '"portalName"' && ! echo "$response" | grep -qi '"error"'
 }
 
 create_portal() {
@@ -1409,12 +1633,19 @@ update_portal_webcontext() {
     print_task_header "更新 Portal WebContextURL [幂等执行]"
     local host_ip=$(get_host_ip)
 
-    local portal_token=$(curl -sk -X POST "https://${host_ip}:${PORTAL_PORT}/geoscene/sharing/rest/generateToken" \
-        -d "username=$PORTAL_ADMIN_USER" -d "password=$PORTAL_ADMIN_PASS" \
-        -d "client=requestip" -d "f=json" 2>/dev/null | grep -oP '"token":"[^"]+' | cut -d'"' -f4)
+    local portal_token=""
+    for _ in {1..12}; do
+        portal_token=$(curl -sk -X POST "https://${host_ip}:${PORTAL_PORT}/geoscene/sharing/rest/generateToken" \
+            -d "username=$PORTAL_ADMIN_USER" -d "password=$PORTAL_ADMIN_PASS" \
+            -d "client=requestip" -d "f=json" 2>/dev/null | grep -oP '"token":"[^"]+' | cut -d'"' -f4)
+        [[ -n "$portal_token" ]] && break
+        sleep 5
+    done
     [[ -z "$portal_token" ]] && { log_warn "无法获取Portal Token"; return 1; }
 
-    local web_context_url="https://${host_ip}:${PORTAL_PORT}/geoscene"
+    local public_host="${FQDN:-$host_ip}"
+    local web_context_url="https://${public_host}:${WEBADAPTOR_PORT}/${WEBADAPTOR_CONTEXT}"
+    [[ "$WEBADAPTOR_PORT" == "443" ]] && web_context_url="https://${public_host}/${WEBADAPTOR_CONTEXT}"
 
     if curl -sk -X POST "https://${host_ip}:${PORTAL_PORT}/geoscene/portaladmin/system/updateWebContextURL" \
         -d "webContextURL=$web_context_url" -d "token=$portal_token" -d "f=json" &>/dev/null; then
@@ -1422,8 +1653,16 @@ update_portal_webcontext() {
         runuser -u "$GS_USER" -- "$GS_BASE/portal/stopportal.sh" 2>/dev/null || true
         sleep 10
         runuser -u "$GS_USER" -- "$GS_BASE/portal/startportal.sh" || true
-        sleep 30
-        return 0
+        local elapsed=0
+        while [[ $elapsed -lt 180 ]]; do
+            if curl -sk "https://${host_ip}:${PORTAL_PORT}/geoscene/rest/info" &>/dev/null; then
+                return 0
+            fi
+            sleep 5
+            elapsed=$((elapsed + 5))
+        done
+        log_warn "Portal 重启后未就绪"
+        return 1
     else
         log_warn "WebContextURL 更新失败"
         return 1
@@ -1436,6 +1675,7 @@ update_portal_webcontext() {
 configure_webadaptor() {
     [[ "$DRY_RUN" == true ]] && return 0
     [[ "$INSTALL_WEBADAPTOR" == false ]] && { log_info "跳过WebAdaptor配置"; return 0; }
+    local host_ip=$(get_host_ip)
 
     print_task_header "配置 GeoScene WebAdaptor [幂等执行]"
 
@@ -1450,15 +1690,33 @@ configure_webadaptor() {
     local war_file=$(find "$webadaptor_dir" -name "geoscene.war" 2>/dev/null | head -1)
     [[ -z "$war_file" ]] && { log_error "未找到 geoscene.war"; return 1; }
 
-    # 部署war（幂等）
-    if [[ -f "$TOMCAT_HOME/webapps/geoscene.war" ]]; then
-        log_info "WebAdaptor war已部署 [幂等执行]"
-    else
-        print_subtask "部署 geoscene.war..."
-        cp "$war_file" "$TOMCAT_HOME/webapps/"
+    # 部署两个 WebAdaptor context：Portal 使用 /geoscene，Server 使用 /server。
+    # 同一个 WebAdaptor WAR 可以通过不同文件名暴露为两个 Tomcat context，
+    # 但两者仍必须分别执行 configurewebadaptor.sh 注册。
+    local copied_war=false
+    if [[ ! -f "$TOMCAT_HOME/webapps/geoscene.war" ]]; then
+        print_subtask "部署 Portal WebAdaptor WAR..."
+        cp "$war_file" "$TOMCAT_HOME/webapps/geoscene.war"
+        copied_war=true
+    fi
+    if [[ ! -f "$TOMCAT_HOME/webapps/server.war" ]]; then
+        print_subtask "部署 Server WebAdaptor WAR..."
         cp "$war_file" "$TOMCAT_HOME/webapps/server.war"
-        chown "$GS_USER:$GS_GROUP" "$TOMCAT_HOME/webapps/"*.war
-        log_success "WebAdaptor 部署完成 [幂等执行]"
+        copied_war=true
+    fi
+    if [[ "$copied_war" == true ]]; then
+        chown "$GS_USER:$GS_GROUP" "$TOMCAT_HOME/webapps/geoscene.war" "$TOMCAT_HOME/webapps/server.war"
+        log_success "Portal/Server WebAdaptor WAR 部署完成 [幂等执行]"
+    else
+        log_info "Portal/Server WebAdaptor WAR 已部署 [幂等执行]"
+    fi
+
+    # Make the bare hostname useful; the WebAdaptor itself lives at /geoscene.
+    local root_app="$TOMCAT_HOME/webapps/ROOT"
+    if [[ ! -f "$root_app/index.jsp" ]]; then
+        mkdir -p "$root_app"
+        printf '%s\n' '<%@ page contentType="text/html;charset=UTF-8" %><% response.sendRedirect("/geoscene"); %>' > "$root_app/index.jsp"
+        chown -R "$GS_USER:$GS_GROUP" "$root_app"
     fi
 
     # 配置server.xml HTTPS
@@ -1468,51 +1726,103 @@ configure_webadaptor() {
         chown "$GS_USER:$GS_GROUP" "$TOMCAT_HOME/bin/"*.pfx 2>/dev/null || true
     fi
 
-    log_success "WebAdaptor 配置完成 [幂等执行]"
-}
+    local server_xml="$TOMCAT_HOME/conf/server.xml"
+    if [[ -f "$server_xml" && -f "$pfx_file" ]]; then
+        # Recover a previous valid Tomcat configuration if an older installer
+        # run truncated server.xml while removing commented Connector examples.
+        if ! grep -q '<Engine[[:space:]]' "$server_xml" || ! grep -q '</Engine>' "$server_xml" || ! grep -q '</Service>' "$server_xml"; then
+            local backup_xml
+            for backup_xml in "$server_xml".bak.*; do
+                [[ -f "$backup_xml" ]] || continue
+                if grep -q '<Engine[[:space:]]' "$backup_xml" && grep -q '</Engine>' "$backup_xml" && grep -q '</Service>' "$backup_xml"; then
+                    cp "$backup_xml" "$server_xml"
+                    log_warn "检测到损坏的 server.xml，已从备份恢复: $(basename "$backup_xml")"
+                    break
+                fi
+            done
+        fi
+        if ! grep -q '<Engine[[:space:]]' "$server_xml" || ! grep -q '</Engine>' "$server_xml" || ! grep -q '</Service>' "$server_xml"; then
+            log_error "Tomcat server.xml 结构无效，无法启动 WebAdaptor"
+            return 1
+        fi
+        sanitize_tomcat_connectors "$server_xml" || {
+            log_error "Tomcat server.xml 连接器清理失败"
+            return 1
+        }
+        # Disable Tomcat's TCP shutdown socket.  It is unnecessary under
+        # systemd and causes repeated/idempotent starts to fail when a stale
+        # process still owns port 8005.
+        sed -i -E 's#<Server port="[^"]*" shutdown="SHUTDOWN">#<Server port="-1" shutdown="SHUTDOWN">#' "$server_xml"
+        if grep -q "GeoScene WebAdaptor HTTPS" "$server_xml"; then
+            sed -i -E "s#certificateKeystoreFile=\"[^\"]*\"#certificateKeystoreFile=\"$pfx_file\"#g; s#certificateKeystorePassword=\"[^\"]*\"#certificateKeystorePassword=\"$CERT_PASSWORD\"#g" "$server_xml"
+        else
+            sed -i "/<\\/Service>/i\\    <!-- GeoScene WebAdaptor HTTPS -->\n    <Connector port=\"$WEBADAPTOR_PORT\" protocol=\"org.apache.coyote.http11.Http11NioProtocol\" SSLEnabled=\"true\" maxThreads=\"150\">\n      <SSLHostConfig>\n        <Certificate certificateKeystoreFile=\"$pfx_file\" certificateKeystoreType=\"PKCS12\" certificateKeystorePassword=\"$CERT_PASSWORD\" />\n      </SSLHostConfig>\n    </Connector>" "$server_xml"
+        fi
+    fi
 
-#==============================================================================
-# 联合托管配置
-#==============================================================================
-configure_federation() {
-    [[ "$DRY_RUN" == true ]] && return 0
-    [[ "$CONFIGURE_FEDERATION" == false ]] && { log_info "跳过联合托管配置"; return 0; }
+    chown -R "$GS_USER:$GS_GROUP" "$TOMCAT_HOME"
+    if [[ -f /etc/systemd/system/geoscene-tomcat.service ]]; then
+        systemctl daemon-reload
+        systemctl restart geoscene-tomcat.service >/dev/null 2>&1 || true
+    elif [[ -x "$TOMCAT_HOME/bin/startup.sh" ]] && ! ss -ltnH 2>/dev/null | grep -qE ":${WEBADAPTOR_PORT}[[:space:]]"; then
+        runuser -u "$GS_USER" -- env HOME="$GS_HOME" JAVA_HOME="$JDK_HOME" CATALINA_HOME="$TOMCAT_HOME" "$TOMCAT_HOME/bin/startup.sh" >/dev/null 2>&1 || true
+    fi
+    local elapsed=0
+    while [[ $elapsed -lt 60 ]]; do
+        if ss -ltnH 2>/dev/null | grep -qE ":${WEBADAPTOR_PORT}[[:space:]]"; then
+            break
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    ss -ltnH 2>/dev/null | grep -qE ":${WEBADAPTOR_PORT}[[:space:]]" || { log_error "WebAdaptor端口未监听: $WEBADAPTOR_PORT"; return 1; }
 
-    if [[ ! -d "$GS_BASE/server" || ! -d "$GS_BASE/portal" ]]; then
-        log_warn "Server或Portal未安装，跳过联合托管"
+    local wa_tool
+    wa_tool=$(find "$webadaptor_dir" -type f -name configurewebadaptor.sh -executable 2>/dev/null | head -1)
+    [[ -n "$wa_tool" ]] || { log_error "未找到 configurewebadaptor.sh，无法注册 Portal/Server WebAdaptor"; return 1; }
+
+    local public_host="${FQDN:-$(hostname -f 2>/dev/null || true)}"
+    if [[ -z "$public_host" || "$public_host" == "localhost" || "$public_host" == "localhost.localdomain" || "$public_host" =~ ^[0-9]+(\.[0-9]+){3}$ || "$public_host" == *:* ]]; then
+        log_error "WebAdaptor 注册必须使用可解析的 FQDN，当前值无效: ${public_host:-<空>}"
         return 1
     fi
+    local public_base="https://${public_host}"
+    [[ "$WEBADAPTOR_PORT" != "443" ]] && public_base+=":${WEBADAPTOR_PORT}"
+    local portal_wa_url="${public_base}/${WEBADAPTOR_CONTEXT}/webadaptor"
+    local server_wa_url="${public_base}/${SERVER_WEBADAPTOR_CONTEXT}/webadaptor"
 
-    print_task_header "配置 Portal-Server 联合托管 [幂等执行]"
-    local host_ip=$(get_host_ip)
+    register_webadaptor() {
+        local mode="$1" wa_url="$2" gateway_url="$3" admin_user="$4" admin_pass="$5" allow_admin="$6"
+        local output rc
+        local -a cmd=("$wa_tool" -m "$mode" -w "$wa_url" -g "$gateway_url" -u "$admin_user" -p "$admin_pass")
+        [[ "$allow_admin" == true ]] && cmd+=(-a true)
 
-    local portal_token=$(curl -sk -X POST "https://${host_ip}:${PORTAL_PORT}/geoscene/sharing/rest/generateToken" \
-        -d "username=$PORTAL_ADMIN_USER" -d "password=$PORTAL_ADMIN_PASS" \
-        -d "client=requestip" -d "f=json" 2>/dev/null | grep -oP '"token":"[^"]+' | cut -d'"' -f4)
-    [[ -z "$portal_token" ]] && { log_warn "无法获取Portal Token"; return 1; }
+        print_subtask "注册 ${mode} WebAdaptor: ${wa_url} ..."
+        set +e
+        output=$(runuser -u "$GS_USER" -- env HOME="$GS_HOME" JAVA_HOME="$JDK_HOME" \
+            PATH="$JDK_HOME/bin:$PATH" "${cmd[@]}" 2>&1)
+        rc=$?
+        set -e
+        printf '%s\n' "$output" >> "$LOG_FILE"
 
-    local server_url="https://${host_ip}:${SERVER_PORT}"
-    local server_admin_url="https://${host_ip}:${SERVER_PORT}/geoscene/admin"
-
-    print_subtask "添加Server到Portal..."
-    local add_response=$(curl -sk -X POST "https://${host_ip}:${PORTAL_PORT}/geoscene/portaladmin/federation/servers/add" \
-        -d "url=$server_url" -d "adminUrl=$server_admin_url" \
-        -d "username=$SITE_ADMIN_USER" -d "password=$SITE_ADMIN_PASS" \
-        -d "isAdmin=True" -d "token=$portal_token" -d "f=json" 2>/dev/null)
-
-    if echo "$add_response" | grep -qi "success"; then
-        log_success "Server 已添加到Portal [幂等执行]"
-
-        local server_id=$(echo "$add_response" | grep -oP '"serverId":"[^"]+' | cut -d'"' -f4)
-        if [[ -n "$server_id" ]]; then
-            curl -sk -X POST "https://${host_ip}:${PORTAL_PORT}/geoscene/portaladmin/federation/servers/update" \
-                -d "serverId=$server_id" -d "isHosted=True" \
-                -d "token=$portal_token" -d "f=json" &>/dev/null
-            log_success "联合托管配置完成 [幂等执行]"
+        if (( rc != 0 )); then
+            log_error "${mode} WebAdaptor 注册失败（退出码 ${rc}），命令输出: ${output}"
+            return 1
         fi
-    else
-        log_warn "联合托管配置可能需要手动完成"
-    fi
+        if grep -qiE 'successfully[[:space:]]+registered|already[[:space:]]+registered|successfully[[:space:]]+configured|already[[:space:]]+configured' <<< "$output"; then
+            log_success "${mode} WebAdaptor 注册成功"
+        else
+            log_warn "${mode} WebAdaptor 命令已执行但未检测到成功标志，请检查日志: ${LOG_FILE}"
+        fi
+    }
+
+    # Portal 和 Server 必须分别注册；复制 server.war 本身不会完成 Server 注册。
+    register_webadaptor portal "$portal_wa_url" "https://${public_host}:${PORTAL_PORT}" \
+        "$PORTAL_ADMIN_USER" "$PORTAL_ADMIN_PASS" false
+    register_webadaptor server "$server_wa_url" "https://${public_host}:${SERVER_PORT}" \
+        "$SITE_ADMIN_USER" "$SITE_ADMIN_PASS" true
+
+    log_success "WebAdaptor 配置完成 [幂等执行]"
 }
 
 #==============================================================================
@@ -1534,14 +1844,19 @@ print_summary() {
     echo "  日志文件: $LOG_FILE"
     echo ""
     echo "  访问地址:"
-    echo "    Server Manager: https://${host_ip}:${SERVER_PORT}/geoscene/manager"
-    echo "    Portal:         https://${host_ip}:${PORTAL_PORT}/geoscene/home"
-    echo "    DataStore:      https://${host_ip}:${DATASTORE_PORT}/geoscene/datastore"
-    [[ "$INSTALL_WEBADAPTOR" == true ]] && echo "    WebAdaptor:     https://${fqdn_display}:${WEBADAPTOR_PORT}/${WEBADAPTOR_CONTEXT}"
+    echo "    Server Manager: https://${fqdn_display}:${SERVER_PORT}/geoscene/manager"
+    echo "    Portal:         https://${fqdn_display}:${PORTAL_PORT}/geoscene/home"
+    echo "    DataStore:      https://${fqdn_display}:${DATASTORE_PORT}/geoscene/datastore"
+    if [[ "$INSTALL_WEBADAPTOR" == true ]]; then
+        local wa_base="https://${fqdn_display}"
+        [[ "$WEBADAPTOR_PORT" != "443" ]] && wa_base+=":${WEBADAPTOR_PORT}"
+        echo "    Portal WebAdaptor: ${wa_base}/${WEBADAPTOR_CONTEXT}"
+        echo "    Server WebAdaptor: ${wa_base}/${SERVER_WEBADAPTOR_CONTEXT}"
+    fi
     echo ""
     echo "  管理员账户:"
-    echo "    Server: $SITE_ADMIN_USER / $SITE_ADMIN_PASS"
-    echo "    Portal: $PORTAL_ADMIN_USER / $PORTAL_ADMIN_PASS"
+    echo "    Server: $SITE_ADMIN_USER / （密码已隐藏，请从 root-only 凭据文件读取）"
+    echo "    Portal: $PORTAL_ADMIN_USER / （密码已隐藏，请从 root-only 凭据文件读取）"
     echo ""
     echo -e "\033[32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m"
 }
@@ -1562,13 +1877,12 @@ main() {
     check_prerequisites
     scan_workspace
     setup_system
+    disable_ipv6
     configure_hostname_and_hosts
 
-    # 下载依赖
-    if [[ "$AUTO_DOWNLOAD" == true ]]; then
-        download_and_install_jdk
-        download_and_install_tomcat
-    fi
+    # 准备依赖：优先使用 DATA_DIR 中的本地压缩包，缺失时才按 AUTO_DOWNLOAD 下载
+    download_and_install_jdk
+    download_and_install_tomcat
 
     create_self_signed_certificate
 
@@ -1592,9 +1906,8 @@ main() {
         # Portal
         start_portal && create_portal && update_portal_webcontext
 
-        # WebAdaptor & Federation
+        # WebAdaptor（Portal-Server 联合托管请在安装后手动完成）
         configure_webadaptor
-        configure_federation
     fi
 
     [[ "$DRY_RUN" == true ]] && log_dry "预演结束" || print_summary
@@ -1609,38 +1922,65 @@ perform_health_check() {
     print_task_header "安装后健康检查"
     local all_passed=true
     local host_ip=$(get_host_ip)
+    local health_host="${FQDN:-$host_ip}"
 
     # 1. Server健康检查
     print_subtask "检查 Server 状态..."
-    if curl -sk "https://${host_ip}:${SERVER_PORT}/geoscene/rest/info" &>/dev/null; then
+    local server_http
+    server_http=$(curl -sk -o /dev/null -w '%{http_code}' \
+        "https://${health_host}:${SERVER_PORT}/geoscene/rest/info?f=pjson" 2>/dev/null || true)
+    if [[ "$server_http" == "200" ]]; then
         print_subtask_success "Server API 正常"
-        local token=$(curl -sk -X POST "https://${host_ip}:${SERVER_PORT}/geoscene/admin/generateToken" \
+        local token=$(curl -sk -X POST "https://${health_host}:${SERVER_PORT}/geoscene/admin/generateToken" \
             -d "username=$SITE_ADMIN_USER" -d "password=$SITE_ADMIN_PASS" \
             -d "client=requestip" -d "f=json" 2>/dev/null | grep -oP '"token":"[^"]+' | cut -d'"' -f4)
         [[ -n "$token" ]] && print_subtask_success "Server 授权正常" || print_subtask_warn "Server 授权可能有问题"
     else
-        print_subtask_error "Server API 无法访问"
+        print_subtask_error "Server API 状态异常（HTTP ${server_http:-000}）"
         all_passed=false
     fi
 
     # 2. Portal健康检查
     print_subtask "检查 Portal 状态..."
-    if curl -sk "https://${host_ip}:${PORTAL_PORT}/geoscene/rest/info" &>/dev/null; then
+    local portal_http
+    portal_http=$(curl -sk -o /dev/null -w '%{http_code}' \
+        "https://${health_host}:${PORTAL_PORT}/geoscene/sharing/rest/info?f=json" 2>/dev/null || true)
+    if [[ "$portal_http" == "200" ]]; then
         print_subtask_success "Portal API 正常"
     else
-        print_subtask_error "Portal API 无法访问"
+        print_subtask_error "Portal API 状态异常（HTTP ${portal_http:-000}）"
         all_passed=false
     fi
 
     # 3. DataStore健康检查
     print_subtask "检查 DataStore 状态..."
-    if curl -sk "https://${host_ip}:${DATASTORE_PORT}/geoscene/datastore" &>/dev/null; then
+    local datastore_http
+    datastore_http=$(curl -skL -o /dev/null -w '%{http_code}' \
+        "https://${health_host}:${DATASTORE_PORT}/geoscene/datastore?f=json" 2>/dev/null || true)
+    if [[ "$datastore_http" == "200" ]]; then
         print_subtask_success "DataStore API 正常"
     else
-        print_subtask_warn "DataStore API 无法访问"
+        print_subtask_warn "DataStore API 状态异常（HTTP ${datastore_http:-000}）"
     fi
 
-    # 4. 系统资源检查
+    # 4. WebAdaptor context 检查：端口监听不代表两个 WAR 都已部署。
+    if [[ "$INSTALL_WEBADAPTOR" == true ]]; then
+        local wa_host="${FQDN:-$host_ip}"
+        local wa_base="https://${wa_host}"
+        [[ "$WEBADAPTOR_PORT" != "443" ]] && wa_base+=":${WEBADAPTOR_PORT}"
+        local context code
+        for context in "$WEBADAPTOR_CONTEXT" "$SERVER_WEBADAPTOR_CONTEXT"; do
+            code=$(curl -sk -o /dev/null -w '%{http_code}' "${wa_base}/${context}/" 2>/dev/null || true)
+            if [[ "$code" =~ ^(200|301|302|401|403)$ ]]; then
+                print_subtask_success "WebAdaptor /${context} 可访问（HTTP ${code}）"
+            else
+                print_subtask_error "WebAdaptor /${context} 不可访问（HTTP ${code:-000}）"
+                all_passed=false
+            fi
+        done
+    fi
+
+    # 5. 系统资源检查
     print_subtask "检查系统资源..."
     local ram_mb=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
     local disk_avail=$(df -h "$GS_HOME" 2>/dev/null | awk 'NR==2{print $4}')
@@ -1657,60 +1997,92 @@ setup_systemd_services() {
 
     print_task_header "配置 systemd 服务"
 
-    cat > /etc/systemd/system/geoscene-server.service << EOF
+    cat > /etc/systemd/system/geosceneserver.service << EOF
 [Unit]
 Description=GeoScene Enterprise Server
 After=network.target
 [Service]
-Type=forking
+Type=oneshot
+RemainAfterExit=true
 User=$GS_USER
 Group=$GS_GROUP
+Environment=HOME=$GS_HOME
 ExecStart=$GS_BASE/server/startserver.sh
 ExecStop=$GS_BASE/server/stopserver.sh
-PIDFile=$GS_BASE/server/usr/logs/server.pid
-Restart=on-failure
-RestartSec=30
+    GuessMainPID=false
+    LimitNOFILE=65535
 [Install]
 WantedBy=multi-user.target
 EOF
 
-    cat > /etc/systemd/system/geoscene-portal.service << EOF
+    cat > /etc/systemd/system/geosceneportal.service << EOF
 [Unit]
 Description=GeoScene Enterprise Portal
-After=network.target geoscene-server.service
+After=network.target geosceneserver.service
 [Service]
-Type=forking
+Type=oneshot
+RemainAfterExit=true
 User=$GS_USER
 Group=$GS_GROUP
+Environment=HOME=$GS_HOME
 ExecStart=$GS_BASE/portal/startportal.sh
 ExecStop=$GS_BASE/portal/stopportal.sh
-PIDFile=$GS_BASE/portal/usr/logs/portal.pid
-Restart=on-failure
-RestartSec=30
+    GuessMainPID=false
+    LimitNOFILE=65535
 [Install]
 WantedBy=multi-user.target
 EOF
 
-    cat > /etc/systemd/system/geoscene-datastore.service << EOF
+    cat > /etc/systemd/system/geoscenedatastore.service << EOF
 [Unit]
 Description=GeoScene Enterprise DataStore
-After=network.target geoscene-server.service
+After=network.target geosceneserver.service
 [Service]
-Type=forking
+Type=oneshot
+RemainAfterExit=true
 User=$GS_USER
 Group=$GS_GROUP
+Environment=HOME=$GS_HOME
 ExecStart=$GS_BASE/datastore/startdatastore.sh
 ExecStop=$GS_BASE/datastore/stopdatastore.sh
-PIDFile=$GS_BASE/datastore/usr/logs/datastore.pid
-Restart=on-failure
-RestartSec=30
+    GuessMainPID=false
+    LimitNOFILE=65535
 [Install]
 WantedBy=multi-user.target
 EOF
 
-    chmod 644 /etc/systemd/system/geoscene-*.service
+    if [[ "$INSTALL_WEBADAPTOR" == true ]]; then
+        cat > /etc/systemd/system/geoscene-tomcat.service << EOF
+[Unit]
+Description=GeoScene WebAdaptor Tomcat
+After=network.target geosceneserver.service geosceneportal.service
+[Service]
+Type=simple
+User=$GS_USER
+Group=$GS_GROUP
+Environment=HOME=$GS_HOME
+Environment=JAVA_HOME=$JDK_HOME
+Environment=CATALINA_HOME=$TOMCAT_HOME
+Environment=CATALINA_PID=$TOMCAT_HOME/temp/tomcat.pid
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+ExecStart=$TOMCAT_HOME/bin/catalina.sh run
+ExecStop=/bin/kill -TERM \$MAINPID
+KillMode=process
+Restart=on-failure
+RestartSec=15
+[Install]
+WantedBy=multi-user.target
+EOF
+    fi
+
+    chmod 644 /etc/systemd/system/geosceneserver.service /etc/systemd/system/geosceneportal.service /etc/systemd/system/geoscenedatastore.service
+    [[ -f /etc/systemd/system/geoscene-tomcat.service ]] && chmod 644 /etc/systemd/system/geoscene-tomcat.service
     systemctl daemon-reload
-    systemctl enable geoscene-server.service geoscene-portal.service geoscene-datastore.service
+    systemctl enable geosceneserver.service geosceneportal.service geoscenedatastore.service
+    [[ "$INSTALL_WEBADAPTOR" == true ]] && systemctl enable geoscene-tomcat.service
+    # Keep service state consistent with the vendor start scripts used above.
+    systemctl start geosceneserver.service geosceneportal.service geoscenedatastore.service 2>/dev/null || true
 
     log_success "systemd 服务配置完成"
 }
@@ -1733,14 +2105,14 @@ EOF
     chmod +x "$tomcat_setenv"
     chown "$GS_USER:$GS_GROUP" "$tomcat_setenv"
 
-    # 内核参数优化
-    cat >> /etc/sysctl.conf << EOF
+    # 内核参数优化（独立 drop-in，避免重复追加 /etc/sysctl.conf）
+    cat > /etc/sysctl.d/99-geoscene.conf << EOF
 # GeoScene Performance Tuning
-vm.swappiness=10
+vm.swappiness=1
 vm.dirty_ratio=40
 net.core.somaxconn=65535
 EOF
-    sysctl -p &>/dev/null || true
+    sysctl --load=/etc/sysctl.d/99-geoscene.conf &>/dev/null || true
 
     log_success "性能调优应用完成"
 }
@@ -1797,17 +2169,17 @@ main_with_enhancements() {
 
     # 创建备份
     create_backup
+    prepare_reinstall
 
     check_prerequisites
     scan_workspace
     setup_system
+    disable_ipv6
     configure_hostname_and_hosts
 
-    # 下载依赖
-    if [[ "$AUTO_DOWNLOAD" == true ]]; then
-        download_and_install_jdk
-        download_and_install_tomcat
-    fi
+    # 准备依赖：优先使用 DATA_DIR 中的本地压缩包，缺失时才按 AUTO_DOWNLOAD 下载
+    download_and_install_jdk
+    download_and_install_tomcat
 
     create_self_signed_certificate
 
@@ -1824,12 +2196,14 @@ main_with_enhancements() {
 
         start_server && authorize_server && create_server_site
         start_datastore && configure_datastore
-        start_portal && create_portal && update_portal_webcontext
+        start_portal && create_portal
+        # Create the Tomcat unit before WebAdaptor startup so the service can
+        # bind HTTPS port 443 with its narrowly-scoped capability.
+        setup_systemd_services
         configure_webadaptor
-        configure_federation
+        update_portal_webcontext
 
         # 新增功能
-        setup_systemd_services
         apply_performance_tuning
         setup_log_management
     fi

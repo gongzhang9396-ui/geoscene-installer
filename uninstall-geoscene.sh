@@ -200,9 +200,20 @@ load_config_from_file() {
 
 load_config_from_file
 
-# 动态调整路径
+# 动态调整路径；兼容当前 /geoscenedata 部署布局。
 [[ -z "$JDK_HOME" ]] && JDK_HOME="$GS_BASE/jdk"
 [[ -z "$TOMCAT_HOME" ]] && TOMCAT_HOME="$GS_BASE/tomcat"
+# Prefer the active GeoScene layout when it contains installed components,
+# even if an old empty/default GS_BASE directory still exists.
+if [[ -d "/geoscenedata/geoscene/server" || -d "/geoscenedata/geoscene/portal" || -d "/geoscenedata/geoscene/datastore" || -d "/geoscenedata/geoscene/webadaptor" || -f "/geoscenedata/geoscene/collect-logs.sh" ]]; then
+    GS_BASE="/geoscenedata/geoscene"
+fi
+if [[ ! -d "$JDK_HOME" && -d "/geoscenedata/jdk" ]]; then
+    JDK_HOME="/geoscenedata/jdk"
+fi
+if [[ ! -d "$TOMCAT_HOME" && -d "/geoscenedata/tomcat9" ]]; then
+    TOMCAT_HOME="/geoscenedata/tomcat9"
+fi
 
 #==============================================================================
 # 常量
@@ -261,7 +272,7 @@ stop_services() {
     print_task_header "停止 GeoScene 服务"
 
     # v7.0: 新增 geoscene-tomcat 服务
-    for svc in geoscene-server geoscene-portal geoscene-datastore geoscene-tomcat geoscene-daemon arcgisserver arcgisportal arcgisdatastore; do
+    for svc in geosceneserver geosceneportal geoscenedatastore geoscene-tomcat geoscene-server geoscene-portal geoscene-datastore geoscene-daemon arcgisserver arcgisportal arcgisdatastore; do
         if systemctl list-units --full -all 2>/dev/null | grep -q "${svc}.service"; then
             if systemctl is-active --quiet "$svc" 2>/dev/null; then
                 print_subtask "停止 $svc..."
@@ -318,17 +329,20 @@ silent_uninstall() {
     print_task_header "执行静默卸载"
 
     if [[ -d "$GS_BASE/server" ]]; then
-        local uninstaller="$GS_BASE/server/Uninstall_ArcGIS_Server"
+        local uninstaller="$GS_BASE/server/uninstall_GeoSceneServer"
+        [[ ! -x "$uninstaller" ]] && uninstaller="$GS_BASE/server/Uninstall_ArcGIS_Server"
         [[ -x "$uninstaller" ]] && runuser -u "$GS_USER" -- "$uninstaller" -s 2>/dev/null && print_subtask_success "Server 静默卸载完成" || print_subtask_warn "Server 静默卸载失败"
     fi
 
     if [[ -d "$GS_BASE/portal" ]]; then
-        local uninstaller="$GS_BASE/portal/Uninstall_Portal_for_ArcGIS"
+        local uninstaller="$GS_BASE/portal/uninstall_GeoScenePortal"
+        [[ ! -x "$uninstaller" ]] && uninstaller="$GS_BASE/portal/Uninstall_Portal_for_ArcGIS"
         [[ -x "$uninstaller" ]] && runuser -u "$GS_USER" -- "$uninstaller" -s 2>/dev/null && print_subtask_success "Portal 静默卸载完成" || print_subtask_warn "Portal 静默卸载失败"
     fi
 
     if [[ -d "$GS_BASE/datastore" ]]; then
-        local uninstaller="$GS_BASE/datastore/Uninstall_ArcGIS_DataStore"
+        local uninstaller="$GS_BASE/datastore/uninstall_GeoSceneDataStore"
+        [[ ! -x "$uninstaller" ]] && uninstaller="$GS_BASE/datastore/Uninstall_ArcGIS_DataStore"
         [[ -x "$uninstaller" ]] && runuser -u "$GS_USER" -- "$uninstaller" -s 2>/dev/null && print_subtask_success "DataStore 静默卸载完成" || print_subtask_warn "DataStore 静默卸载失败"
     fi
 }
@@ -376,6 +390,12 @@ remove_system_config() {
     fi
 
     # logrotate配置
+    if [[ -f "/etc/sysctl.d/99-geoscene.conf" ]]; then
+        rm -f "/etc/sysctl.d/99-geoscene.conf"
+        sysctl --system >/dev/null 2>&1 || true
+        print_subtask_success "已删除 sysctl GeoScene 配置"
+    fi
+
     if [[ -f "/etc/logrotate.d/geoscene" ]]; then
         rm -f "/etc/logrotate.d/geoscene"
         rm -f "/etc/logrotate.d/geoscene-tomcat" 2>/dev/null || true
@@ -391,7 +411,7 @@ remove_systemd_services() {
     local removed=0
 
     # v7.0: 包含 geoscene-tomcat
-    for svc in geoscene-server geoscene-portal geoscene-datastore geoscene-tomcat geoscene-daemon arcgisserver arcgisportal arcgisdatastore; do
+    for svc in geosceneserver geosceneportal geoscenedatastore geoscene-tomcat geoscene-server geoscene-portal geoscene-datastore geoscene-daemon arcgisserver arcgisportal arcgisdatastore; do
         local svc_file="/etc/systemd/system/${svc}.service"
         if [[ -f "$svc_file" ]]; then
             systemctl stop "$svc" 2>/dev/null || true
@@ -521,6 +541,9 @@ remove_installation() {
             rm -rf "$dir"
         fi
     done
+
+    # 安装脚本在 GS_BASE 根目录生成的辅助文件
+    rm -f "$GS_BASE/collect-logs.sh"
 
     # 清理基础目录（如果为空）
     if [[ -d "$GS_BASE" ]] && [[ -z "$(ls -A "$GS_BASE" 2>/dev/null)" ]]; then
