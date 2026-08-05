@@ -4,6 +4,8 @@
 
 当前脚本面向 GeoScene 6.1，整体流程也适用于安装结构相近的 4.1。项目将“可重复的基础部署”交给脚本，将 Portal-Server 联合托管等依赖业务判断的操作保留为安装后的手动步骤。
 
+文档更新：**2026-08-05**。本版本已在目标服务器完成卸载后重装验证，覆盖 Server、Portal、DataStore、Tomcat/WebAdaptor、IPv6 禁用、FQDN、证书和健康检查；配置示例中的域名、邮箱和密码均为占位值。
+
 ## 1. 系统总体架构
 
 ```mermaid
@@ -28,17 +30,17 @@ flowchart LR
 | WebAdaptor/Tomcat | 443 | 对外统一 HTTPS 入口 |
 | PublishingTools 等内部服务 | 9876/9877 | DataStore/发布相关内部通信 |
 
-当前默认访问域名为：
+文档示例访问域名为：
 
 ```text
-portal229.geosceneenterprise.com
+portal.example.com
 ```
 
 如果使用 WebAdaptor，对外入口为：
 
 ```text
-https://portal229.geosceneenterprise.com/geoscene
-https://portal229.geosceneenterprise.com/server
+https://portal.example.com/geoscene
+https://portal.example.com/server
 ```
 
 其中 Portal 和 Server WebAdaptor 由当前安装脚本分别自动注册；Portal-Server 联合托管仍需要安装后手动完成。
@@ -49,7 +51,7 @@ https://portal229.geosceneenterprise.com/server
 
 ```text
 /geoscenedata/
-├── install-geoscene-6.1.sh       # 主安装脚本
+├── install-geoscene.sh            # 主安装脚本
 ├── uninstall-geoscene.sh         # 卸载脚本
 ├── geoscene.conf                  # 部署配置
 ├── licfile/                       # 授权文件
@@ -60,6 +62,8 @@ https://portal229.geosceneenterprise.com/server
 ```
 
 脚本按文件名识别组件和架构。生产部署时建议每类组件只保留一个目标版本的 Linux 安装包，并且只保留一份 Server 授权和一份 Portal 授权，避免自动匹配歧义。
+
+安装包也可以放在 `DATA_DIR`/`--data-dir` 指定的目录中；JDK/Tomcat 压缩包缺失时，`AUTO_DOWNLOAD=true` 会尝试联网下载。若使用自有 JDK/Tomcat，应配置 `JDK_HOME`、`TOMCAT_HOME` 并设置 `AUTO_DOWNLOAD=false`。
 
 ### 2.2 运行目录
 
@@ -122,7 +126,7 @@ https://portal229.geosceneenterprise.com/server
 
 ### `uninstall-geoscene.sh`
 
-负责按顺序停止服务、调用官方卸载程序、删除 systemd、防火墙和系统配置，并按选项清理 JDK、Tomcat、安装目录、备份、日志和 `geoscene` 用户。
+负责按顺序停止服务、调用官方卸载程序、删除 systemd、防火墙和系统配置。默认卸载保留数据、JDK/Tomcat、用户 home、备份和日志；只有 `--purge` 才清理安装目录、JDK/Tomcat 和用户 home，备份与日志分别由 `--remove-backups`、`--remove-logs` 控制。
 
 ### 生成的 `collect-logs.sh`
 
@@ -144,8 +148,8 @@ LICENSE_DIR=/geoscenedata/licfile
 SERVER_LICENSE_FILE=GeoSceneServerAdvanced_GeoSceneServer_1626763.ecp
 PORTAL_LICENSE_FILE=GeoScene_Enterprise_Portal_61_576425_20260720.json
 
-FQDN=portal229.geosceneenterprise.com
-HOSTNAME=portal229
+FQDN=portal.example.com
+HOSTNAME=portal
 CONFIGURE_HOSTNAME=true
 CONFIGURE_HOSTS=true
 DISABLE_IPV6=true
@@ -158,7 +162,7 @@ SITE_ADMIN_USER=siteadmin
 SITE_ADMIN_PASS=<请替换>
 PORTAL_ADMIN_USER=portaladmin
 PORTAL_ADMIN_PASS=<请替换>
-PORTAL_ADMIN_EMAIL=geoscene@geoscene.com
+PORTAL_ADMIN_EMAIL=admin@example.com
 PORTAL_ADMIN_FN=Admin
 PORTAL_ADMIN_LN=User
 PORTAL_ADMIN_QI=1
@@ -175,14 +179,16 @@ CREATE_SELF_SIGNED_CERT=true
 CERT_COUNTRY=CN
 CERT_STATE=Beijing
 CERT_CITY=Beijing
-CERT_ORG=portal229.geosceneenterprise.com
-CERT_OU=portal229.geosceneenterprise.com
-CERT_EMAIL=geoscene@geoscene.com
+CERT_ORG=portal.example.com
+CERT_OU=portal.example.com
+CERT_EMAIL=admin@example.com
 CERT_DAYS=3650
 CERT_PASSWORD=<请替换>
 
-AUTO_DOWNLOAD=false
+AUTO_DOWNLOAD=true
 ```
+
+`AUTO_DOWNLOAD=true` 时，缺少 JDK/Tomcat 本地压缩包会尝试联网下载；如果已经准备好并验证过 `JDK_HOME`、`TOMCAT_HOME`，可设置为 `false`。
 
 ### 重要配置项
 
@@ -218,7 +224,7 @@ sequenceDiagram
     participant P as Portal
     participant W as WebAdaptor
 
-    A->>I: bash install-geoscene-6.1.sh --config=geoscene.conf
+    A->>I: bash install-geoscene.sh --config=geoscene.conf
     I->>OS: 检查资源、端口、架构和依赖
     I->>OS: 创建用户、limits、防火墙、FQDN、IPv6配置
     I->>OS: 准备 JDK、Tomcat 和证书
@@ -257,19 +263,19 @@ sequenceDiagram
 
 ```bash
 cd /geoscenedata
-bash ./install-geoscene-6.1.sh --config=/geoscenedata/geoscene.conf
+bash ./install-geoscene.sh --config=/geoscenedata/geoscene.conf
 ```
 
 直接使用脚本同目录配置时也可以：
 
 ```bash
-bash ./install-geoscene-6.1.sh
+bash ./install-geoscene.sh
 ```
 
 ### 预演检查
 
 ```bash
-bash ./install-geoscene-6.1.sh --config=/geoscenedata/geoscene.conf --dry-run
+bash ./install-geoscene.sh --config=/geoscenedata/geoscene.conf --dry-run
 ```
 
 ### 指定自有 JDK/Tomcat
@@ -285,7 +291,7 @@ AUTO_DOWNLOAD=false
 命令行覆盖方式：
 
 ```bash
-bash ./install-geoscene-6.1.sh \
+bash ./install-geoscene.sh \
   --config=/geoscenedata/geoscene.conf \
   --jdk-home=/opt/jdk \
   --tomcat-home=/opt/tomcat
@@ -301,6 +307,8 @@ TOMCAT_HOME/bin/catalina.sh
 ### 重复执行
 
 脚本支持幂等执行，会尽量复用现有安装、站点、证书和 DataStore 配置。重复执行前仍建议查看日志和服务状态。
+
+需要切换安装包或清理后重装时，可以使用 `--reinstall`；`--data-dir`、`--jdk-home` 和 `--tomcat-home` 可用于命令行覆盖对应路径。
 
 ## 7. WebAdaptor 和联合托管
 
@@ -320,8 +328,8 @@ Portal WebAdaptor 注册参数逻辑等价于：
 ```bash
 ./configurewebadaptor.sh \
   -m portal \
-  -w https://portal229.geosceneenterprise.com/geoscene/webadaptor \
-  -g https://portal229.geosceneenterprise.com:7443 \
+  -w https://portal.example.com/geoscene/webadaptor \
+  -g https://portal.example.com:7443 \
   -u <PORTAL_ADMIN_USER> \
   -p '<PORTAL_ADMIN_PASS>'
 ```
@@ -336,8 +344,8 @@ source /etc/environment
 
 ./configurewebadaptor.sh \
   -m server \
-  -w https://portal229.geosceneenterprise.com/server/webadaptor \
-  -g https://portal229.geosceneenterprise.com:6443 \
+  -w https://portal.example.com/server/webadaptor \
+  -g https://portal.example.com:6443 \
   -u <SITE_ADMIN_USER> \
   -p '<SITE_ADMIN_PASS>' \
   -a true
@@ -364,8 +372,8 @@ Successfully Registered.
 建议使用以下域名地址，不要混用 IP：
 
 ```text
-Server 服务 URL: https://portal229.geosceneenterprise.com/server
-Server Admin URL: https://portal229.geosceneenterprise.com/server/admin
+Server 服务 URL: https://portal.example.com/server
+Server Admin URL: https://portal.example.com/server/admin
 ```
 
 如果未配置 Server WebAdaptor，则使用 Server 的 6443 地址，并确保 Portal 能够解析和访问该域名。
@@ -421,11 +429,11 @@ sysctl net.ipv6.conf.lo.disable_ipv6
 ### 9.2 服务 API
 
 ```bash
-curl -k https://portal229.geosceneenterprise.com:6443/geoscene/rest/info?f=pjson
-curl -k https://portal229.geosceneenterprise.com:7443/geoscene/sharing/rest/info?f=json
-curl -kL https://portal229.geosceneenterprise.com:2443/geoscene/datastore?f=json
-curl -k https://portal229.geosceneenterprise.com/geoscene/sharing/rest/info?f=json
-curl -k https://portal229.geosceneenterprise.com/server/rest/info?f=pjson
+curl -k https://portal.example.com:6443/geoscene/rest/info?f=pjson
+curl -k https://portal.example.com:7443/geoscene/sharing/rest/info?f=json
+curl -kL https://portal.example.com:2443/geoscene/datastore?f=json
+curl -k https://portal.example.com/geoscene/sharing/rest/info?f=json
+curl -k https://portal.example.com/server/rest/info?f=pjson
 ```
 
 Server 的 `/rest` 服务目录可能被管理员禁用，直接访问不带 `f=pjson` 的地址时出现 403 不代表 Server 不可用；应使用上面的 JSON API 地址验证。DataStore 入口会重定向，因此验证时使用 `-L`。
@@ -476,6 +484,17 @@ bash ./uninstall-geoscene.sh --purge --remove-backups --remove-logs
 
 通常 `/geoscenedata` 下的安装包、授权、配置和脚本不会被 `--purge` 删除，便于后续重新安装。执行前应确认没有需要保留的用户数据。
 
+卸载参数：
+
+| 参数 | 作用 |
+|---|---|
+| `--silent` | 调用 GeoScene 官方静默卸载器 |
+| `--purge` | 删除安装目录、JDK/Tomcat、用户 home 等运行数据 |
+| `--remove-backups` | 删除安装前备份 |
+| `--remove-logs` | 删除安装日志、健康报告和卸载日志 |
+| `--force` | 忽略单项错误并继续清理 |
+| `--config=FILE`、`--gs-user`、`--gs-base` | 指定配置、运行用户和安装目录 |
+
 ## 11. 常见问题
 
 ### `set: Illegal option -o pipefail`
@@ -483,13 +502,13 @@ bash ./uninstall-geoscene.sh --purge --remove-backups --remove-logs
 原因是使用了 `sh`：
 
 ```bash
-sh install-geoscene-6.1.sh
+sh install-geoscene.sh
 ```
 
 正确方式：
 
 ```bash
-bash install-geoscene-6.1.sh
+bash install-geoscene.sh
 ```
 
 ### Portal 提示 localhost 无法解析到 127.0.0.1
@@ -503,7 +522,7 @@ getent ahosts localhost
 确认配置中存在：
 
 ```ini
-FQDN=portal229.geosceneenterprise.com
+FQDN=portal.example.com
 CONFIGURE_HOSTS=true
 DISABLE_IPV6=true
 ```
@@ -550,7 +569,7 @@ grep -n 'Connector port' /opt/tomcat/conf/server.xml
 - [ ] 安装后确认 Portal WebAdaptor 和 Server WebAdaptor 均已注册。
 - [ ] 安装后手动完成 Portal-Server 联合托管。
 - [ ] 已保存安装日志、健康检查结果和备份目录。
-- [ ] 已验证重启后四个 systemd 服务能够恢复。
+- [ ] 已验证重启后 Server、Portal、DataStore 和（启用 WebAdaptor 时）Tomcat systemd 服务能够恢复。
 
 ## 13. 当前脚本边界
 
