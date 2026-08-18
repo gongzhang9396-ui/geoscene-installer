@@ -215,6 +215,20 @@ if [[ ! -d "$TOMCAT_HOME" && -d "/geoscenedata/tomcat9" ]]; then
     TOMCAT_HOME="/geoscenedata/tomcat9"
 fi
 
+gs_component_home() {
+    local comp="$1" vendor_name="$1"
+    [[ "$comp" == "webadaptor" ]] && vendor_name="webAdaptor"
+
+    local install_root="$GS_BASE/$comp"
+    if [[ -d "$install_root/geoscene/$vendor_name" ]]; then
+        echo "$install_root/geoscene/$vendor_name"
+    elif [[ -d "$GS_BASE/geoscene/$vendor_name" ]]; then
+        echo "$GS_BASE/geoscene/$vendor_name"
+    else
+        echo "$install_root"
+    fi
+}
+
 #==============================================================================
 # 常量
 #==============================================================================
@@ -283,18 +297,23 @@ stop_services() {
     done
 
     # 使用官方停止脚本
-    if [[ -d "$GS_BASE/server" ]]; then
-        local stop_server="$GS_BASE/server/stopserver.sh"
+    local server_home portal_home datastore_home
+    server_home=$(gs_component_home server)
+    portal_home=$(gs_component_home portal)
+    datastore_home=$(gs_component_home datastore)
+
+    if [[ -d "$server_home" ]]; then
+        local stop_server="$server_home/stopserver.sh"
         [[ -x "$stop_server" ]] && runuser -u "$GS_USER" -- "$stop_server" 2>/dev/null || true
     fi
 
-    if [[ -d "$GS_BASE/portal" ]]; then
-        local stop_portal="$GS_BASE/portal/stopportal.sh"
+    if [[ -d "$portal_home" ]]; then
+        local stop_portal="$portal_home/stopportal.sh"
         [[ -x "$stop_portal" ]] && runuser -u "$GS_USER" -- "$stop_portal" 2>/dev/null || true
     fi
 
-    if [[ -d "$GS_BASE/datastore" ]]; then
-        local stop_ds="$GS_BASE/datastore/stopdatastore.sh"
+    if [[ -d "$datastore_home" ]]; then
+        local stop_ds="$datastore_home/stopdatastore.sh"
         [[ -x "$stop_ds" ]] && runuser -u "$GS_USER" -- "$stop_ds" 2>/dev/null || true
     fi
 
@@ -328,21 +347,26 @@ silent_uninstall() {
 
     print_task_header "执行静默卸载"
 
-    if [[ -d "$GS_BASE/server" ]]; then
-        local uninstaller="$GS_BASE/server/uninstall_GeoSceneServer"
-        [[ ! -x "$uninstaller" ]] && uninstaller="$GS_BASE/server/Uninstall_ArcGIS_Server"
+    local server_home portal_home datastore_home
+    server_home=$(gs_component_home server)
+    portal_home=$(gs_component_home portal)
+    datastore_home=$(gs_component_home datastore)
+
+    if [[ -d "$server_home" ]]; then
+        local uninstaller="$server_home/uninstall_GeoSceneServer"
+        [[ ! -x "$uninstaller" ]] && uninstaller="$server_home/Uninstall_ArcGIS_Server"
         [[ -x "$uninstaller" ]] && runuser -u "$GS_USER" -- "$uninstaller" -s 2>/dev/null && print_subtask_success "Server 静默卸载完成" || print_subtask_warn "Server 静默卸载失败"
     fi
 
-    if [[ -d "$GS_BASE/portal" ]]; then
-        local uninstaller="$GS_BASE/portal/uninstall_GeoScenePortal"
-        [[ ! -x "$uninstaller" ]] && uninstaller="$GS_BASE/portal/Uninstall_Portal_for_ArcGIS"
+    if [[ -d "$portal_home" ]]; then
+        local uninstaller="$portal_home/uninstall_GeoScenePortal"
+        [[ ! -x "$uninstaller" ]] && uninstaller="$portal_home/Uninstall_Portal_for_ArcGIS"
         [[ -x "$uninstaller" ]] && runuser -u "$GS_USER" -- "$uninstaller" -s 2>/dev/null && print_subtask_success "Portal 静默卸载完成" || print_subtask_warn "Portal 静默卸载失败"
     fi
 
-    if [[ -d "$GS_BASE/datastore" ]]; then
-        local uninstaller="$GS_BASE/datastore/uninstall_GeoSceneDataStore"
-        [[ ! -x "$uninstaller" ]] && uninstaller="$GS_BASE/datastore/Uninstall_ArcGIS_DataStore"
+    if [[ -d "$datastore_home" ]]; then
+        local uninstaller="$datastore_home/uninstall_GeoSceneDataStore"
+        [[ ! -x "$uninstaller" ]] && uninstaller="$datastore_home/Uninstall_ArcGIS_DataStore"
         [[ -x "$uninstaller" ]] && runuser -u "$GS_USER" -- "$uninstaller" -s 2>/dev/null && print_subtask_success "DataStore 静默卸载完成" || print_subtask_warn "DataStore 静默卸载失败"
     fi
 }
@@ -394,6 +418,12 @@ remove_system_config() {
         rm -f "/etc/sysctl.d/99-geoscene.conf"
         sysctl --system >/dev/null 2>&1 || true
         print_subtask_success "已删除 sysctl GeoScene 配置"
+    fi
+
+    if [[ -f "/etc/sysctl.d/99-geoscene-ipv6.conf" ]]; then
+        rm -f "/etc/sysctl.d/99-geoscene-ipv6.conf"
+        sysctl --system >/dev/null 2>&1 || true
+        print_subtask_success "已删除 IPv6 GeoScene 配置"
     fi
 
     if [[ -f "/etc/logrotate.d/geoscene" ]]; then
@@ -613,9 +643,9 @@ main() {
 
     # 检测安装
     local detected=()
-    [[ -d "$GS_BASE/server" ]] && detected+=("server")
-    [[ -d "$GS_BASE/portal" ]] && detected+=("portal")
-    [[ -d "$GS_BASE/datastore" ]] && detected+=("datastore")
+    [[ -d "$(gs_component_home server)" ]] && detected+=("server")
+    [[ -d "$(gs_component_home portal)" ]] && detected+=("portal")
+    [[ -d "$(gs_component_home datastore)" ]] && detected+=("datastore")
     [[ -d "$JDK_HOME" ]] && detected+=("jdk")
     [[ -d "$TOMCAT_HOME" ]] && detected+=("tomcat")
 

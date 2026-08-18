@@ -4,7 +4,7 @@
 
 当前脚本面向 GeoScene 6.1，整体流程也适用于安装结构相近的 4.1。项目将“可重复的基础部署”交给脚本，将 Portal-Server 联合托管等依赖业务判断的操作保留为安装后的手动步骤。
 
-文档更新：**2026-08-05**。本版本已在目标服务器完成卸载后重装验证，覆盖 Server、Portal、DataStore、Tomcat/WebAdaptor、IPv6 禁用、FQDN、证书和健康检查；配置示例中的域名、邮箱和密码均为占位值。
+文档更新：**2026-08-18**。本版本已在 GeoScene 6.1 / Ubuntu 22.04 目标服务器完成安装验证，覆盖 Server、Portal、DataStore、Tomcat/WebAdaptor、IPv6 禁用、FQDN、证书、Creator 用户类型和健康检查；配置示例中的域名、邮箱和密码均为占位值。
 
 ## 1. 系统总体架构
 
@@ -63,6 +63,8 @@ https://portal.example.com/server
 
 脚本按文件名识别组件和架构。生产部署时建议每类组件只保留一个目标版本的 Linux 安装包，并且只保留一份 Server 授权和一份 Portal 授权，避免自动匹配歧义。
 
+授权文件名可以包含空格；脚本会在 Server 静默安装时复制为无空格的临时文件，并在安装结束后删除临时副本。
+
 安装包也可以放在 `DATA_DIR`/`--data-dir` 指定的目录中；JDK/Tomcat 压缩包缺失时，`AUTO_DOWNLOAD=true` 会尝试联网下载。若使用自有 JDK/Tomcat，应配置 `JDK_HOME`、`TOMCAT_HOME` 并设置 `AUTO_DOWNLOAD=false`。
 
 ### 2.2 运行目录
@@ -80,6 +82,8 @@ https://portal.example.com/server
 /opt/tomcat/                      # 当前环境使用的 Tomcat/WebAdaptor
 /opt/tomcat/ssl/                  # WebAdaptor 证书
 ```
+
+GeoScene 6.1 原厂安装器可能在组件目录下再生成 `geoscene/<component>`，例如 `$GS_BASE/server/geoscene/server`。安装、systemd、备份、日志和卸载脚本会自动解析实际组件 home，不要求手工移动目录。
 
 ### 2.3 系统级文件
 
@@ -162,6 +166,7 @@ SITE_ADMIN_USER=siteadmin
 SITE_ADMIN_PASS=<请替换>
 PORTAL_ADMIN_USER=portaladmin
 PORTAL_ADMIN_PASS=<请替换>
+PORTAL_ADMIN_USER_TYPE=creatorUT
 PORTAL_ADMIN_EMAIL=admin@example.com
 PORTAL_ADMIN_FN=Admin
 PORTAL_ADMIN_LN=User
@@ -199,6 +204,7 @@ AUTO_DOWNLOAD=true
 | `FQDN` | 所有对外注册和 WebAdaptor 参数使用的完全限定域名 |
 | `HOSTNAME` | 主机短名称 |
 | `DISABLE_IPV6` | 是否禁用 IPv6，默认建议为 `true` |
+| `PORTAL_ADMIN_USER_TYPE` | Portal 管理员用户类型；GeoScene 6.1 实机验证使用 `creatorUT` |
 | `TOMCAT_HOME` | 已有 Tomcat 的安装路径 |
 | `JDK_HOME` | 已有 JDK 的安装路径 |
 | `AUTO_DOWNLOAD` | 缺少 JDK/Tomcat 时是否联网下载 |
@@ -307,6 +313,8 @@ TOMCAT_HOME/bin/catalina.sh
 ### 重复执行
 
 脚本支持幂等执行，会尽量复用现有安装、站点、证书和 DataStore 配置。重复执行前仍建议查看日志和服务状态。
+
+当 Server、Portal、DataStore、WebAdaptor 均已安装时，重复运行会切换为配置模式，跳过软件解压安装，并继续补做或更新站点、DataStore、WebAdaptor、systemd 和健康检查。
 
 需要切换安装包或清理后重装时，可以使用 `--reinstall`；`--data-dir`、`--jdk-home` 和 `--tomcat-home` 可用于命令行覆盖对应路径。
 
@@ -591,6 +599,7 @@ grep -n 'Connector port' /opt/tomcat/conf/server.xml
 - Bash、systemd、`systemctl`。
 - `curl`、`tar`、`hostname`、`ip`、`awk`、`ss`、`openssl` 等命令。
 - `apt-get`、`yum`、`dnf`、`zypper` 或 `pacman` 之一，用于补充依赖。
+- GeoScene 6.1 安装器要求 `en_US.UTF-8`；脚本会检查并尝试通过系统包管理器生成，失败时终止安装。
 - 可写的 `/etc`、systemd、sysctl、防火墙配置。
 - 与服务器 CPU 架构一致的 GeoScene Linux 安装包。
 
