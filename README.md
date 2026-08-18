@@ -6,6 +6,7 @@
 
 ## 更新记录
 
+- **2026-08-18**：完成 GeoScene 6.1 / Ubuntu 22.04 实机安装验证；增加 `en_US.UTF-8` 自动准备、原厂嵌套安装目录识别、带空格授权文件安全暂存、Creator 用户类型、配置模式磁盘检查，以及 Server/Portal/DataStore systemd 路径修复。
 - **2026-08-05**：合并 GeoScene 6.1 实机验证后的安装、卸载、IPv6、FQDN、证书、systemd、健康检查和日志管理更新；Portal 与 Server WebAdaptor 现在会分别自动部署和注册。Portal-Server 联合托管仍保留为安装后的手动步骤。
 - **安全提醒**：仓库中的 `geoscene.conf` 只包含占位密码。生产部署前必须替换管理员密码、证书密码，并将配置文件权限设置为 `600`。
 
@@ -109,6 +110,7 @@ SITE_ADMIN_USER=siteadmin
 SITE_ADMIN_PASS=YourPassword123
 PORTAL_ADMIN_USER=portaladmin
 PORTAL_ADMIN_PASS=YourPassword123
+PORTAL_ADMIN_USER_TYPE=creatorUT
 PORTAL_ADMIN_EMAIL=portaladmin@example.com
 PORTAL_ADMIN_FN=Admin
 PORTAL_ADMIN_LN=User
@@ -233,6 +235,7 @@ bash install-geoscene.sh --skip-hostname
 | `SITE_ADMIN_PASS` | `YourPassword123` | Server 站点管理员密码 |
 | `PORTAL_ADMIN_USER` | `portaladmin` | Portal 管理员用户名 |
 | `PORTAL_ADMIN_PASS` | `YourPassword123` | Portal 管理员密码 |
+| `PORTAL_ADMIN_USER_TYPE` | `creatorUT` | Portal 管理员用户类型；GeoScene 6.1 实机验证值 |
 | `PORTAL_ADMIN_EMAIL` | `portaladmin@example.com` | Portal 管理员邮箱 |
 | `PORTAL_ADMIN_FN` | `Admin` | Portal 管理员名 |
 | `PORTAL_ADMIN_LN` | `User` | Portal 管理员姓 |
@@ -282,6 +285,7 @@ bash install-geoscene.sh --skip-hostname
 
 2. 系统配置 (幂等执行)
    ├─ 创建 GS_USER 用户和 GS_GROUP 组
+   ├─ 检查并生成 GeoScene 6.1 所需的 en_US.UTF-8 locale
    ├─ 配置 limits.conf (nofile=65536, nproc=25059) [幂等更新]
    ├─ 配置 systemd system.conf [幂等更新]
    ├─ 开放防火墙端口
@@ -303,6 +307,7 @@ bash install-geoscene.sh --skip-hostname
 6. 软件安装 (幂等执行)
    ├─ 解压安装包
    ├─ 执行静默安装 (Setup -m silent -l yes)
+   ├─ 自动识别原厂安装器生成的 geoscene/<component> 嵌套目录
    ├─ 架构检查 (安装包 vs 系统)
    └─ 平台检查 (拒绝 Windows 包)
 
@@ -349,6 +354,7 @@ DataStore 必须先注册到 Server，才能支持 Portal 的托管服务功能�
 
 2. **跳过已完成的步骤**
    - 已安装组件自动跳过
+   - 四个组件均已安装时切换为配置模式，降低二次执行的安装磁盘阈值
    - 已授权 Server 自动跳过
    - 已创建站点自动跳过
    - 已配置 DataStore 自动跳过
@@ -463,6 +469,7 @@ Portal 创建后会自动更新 WebContextURL 为实际 IP 地址，并重启 Po
 | 网络 | 可访问互联网（用于下载 JDK/Tomcat） |
 | 权限 | root |
 | 主机名 | **不能包含下划线** (_)，建议使用 FQDN |
+| Locale | GeoScene 6.1 需要 `en_US.UTF-8`；脚本缺失时会尝试生成 |
 
 说明：CentOS Linux 8 已结束生命周期，不建议新建生产部署；如果使用 CentOS 系列，优先选择仍受维护且被 GeoScene 6.1 支持矩阵覆盖的 RHEL/Rocky 等替代发行版。海光 C86 机器先执行 `uname -m`，若返回 `x86_64` 就使用 x86_64 安装包；ARM 机器必须使用 aarch64/ARM64 安装包，不能混用。
 
@@ -528,6 +535,8 @@ A: 授权文件匹配规则：
   - 示例：`GeoScene_Enterprise_Portal_*.json`、`portal_license.json`
 
 **注意**: 如果同时存在多个授权文件，脚本会选择第一个匹配的。建议只保留一个 Server 授权和一个 Portal 授权。
+
+授权文件名允许包含空格。脚本会安全引用路径，并在 Server 静默安装时使用无空格临时副本，安装结束后自动删除该副本。
 
 ### Q: 架构不匹配怎么办？
 
